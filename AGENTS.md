@@ -23,16 +23,17 @@ Swamp team: 3717.
 - Publishing an extension, creating or renaming a collective, posting to the feed, joining the Discord
   as reset and filing Lab issues or pull requests each need Jamie's explicit authorization. Friction
   met while working here goes onto wiki page 3717, in the entry form that page describes.
+- This repository is public, with the full smk tooling and dev shell. Others read it and consume what it
+  publishes; they need not be able to build it. Nothing private goes in: no credentials, no personal
+  data, instances reference vault keys by name, and the forge's address in the dev shell is the only
+  internal hostname it carries.
 - Read Swamp's public manual and the vendor skills under `.claude/skills/`, not its AGPL source.
 
 ## Layout
 
 - `extensions/behaviors/<name>/`: one published extension per directory, self-contained
-  (`manifest.yaml` with `paths.base: manifest`, source, tests, README, LICENSE). Extension sources are
-  published from one public repository per collective, <https://github.com/reset/swamp-extensions> (Jamie's
-  decision, October 20, 2026), which every manifest names; how this repository consumes it (recommended: that
-  repository is the source of truth, plain Deno with no SMK dev shell or forge URL, vendored here as a git
-  submodule) is still Jamie's to decide, and the repository is not created yet.
+  (`manifest.yaml` with `paths.base: manifest`, source, tests, README, LICENSE). Every manifest's
+  `repository` is this repository's public address, <https://github.com/reset/swamp-extensions>.
 - `workflows/`: the workflows this repository runs. `models/`: behavior instances the workflows use.
 - `docs/`: field notes that become feed posts, kept here until they are published.
 - `.claude/skills/swamp`, `.claude/skills/swamp-getting-started`: the vendor's skills, verbatim.
@@ -44,8 +45,7 @@ Swamp team: 3717.
 type-checks and tests every extension with Deno and validates every behavior instance and workflow with
 swamp. Deno is pinned in `.nix/flake.nix`; swamp is installed per machine from the Homebrew tap
 (`brew trust swamp-club/tap`, then `brew install swamp`) and is not in the dev shell, so `bin/test`
-fails with that message where swamp is absent. CI does not exist yet: the repository has no forge
-remote and no CI provider until Jamie names the repository and its owner.
+fails with that message where swamp is absent. buildq runs `make ci` through `.buildq/pipeline.yml`.
 
 Extension work follows the vendor's lifecycle in `.claude/skills/swamp/references/extension/guide.md`:
 `deno check`, registration (`swamp behavior type search`), the adversarial review, unit tests,
