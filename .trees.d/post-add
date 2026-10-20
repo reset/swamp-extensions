@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Copyright (C) 2026 Jamie Stormbreaker - All Rights Reserved
+# Unauthorized copying of this file, via any medium is strictly prohibited
+# Proprietary and confidential
+# smk { overwrite: true }
+# Makes a new tree usable: trusts its .envrc, then runs this repository's own steps. trees creates the
+# tree and knows git and nothing else; this hook is where the project says what else a tree needs.
+#
+# direnv trusts a path, not a repo, so every tree is untrusted when it is made, and none of the dev
+# shell's tools resolve there until it is allowed. A repository's own steps (linking provisioned
+# files, cloning a cache, recording who holds the tree) are each an executable in .trees.d/post-add.d/,
+# run in name order with the same environment trees gives this hook (WORKTREE_PATH, WORKTREE_NAME,
+# WORKTREE_BRANCH and the rest). One that fails fails the add, and the tree stays for it to be finished by hand.
+
+set -euo pipefail
+
+if command -v direnv >/dev/null 2>&1; then
+  direnv allow "$WORKTREE_PATH"
+else
+  echo >&2 "direnv is not on PATH; run 'direnv allow $WORKTREE_PATH' once it is."
+fi
+
+steps="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/post-add.d"
+if [[ -d "$steps" ]]; then
+  for step in "$steps"/*; do
+    [[ -f "$step" && -x "$step" ]] || continue
+    if ! "$step"; then
+      echo >&2 "post-add: $(basename "$step") failed, so this tree is not ready."
+      exit 1
+    fi
+  done
+fi

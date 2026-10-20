@@ -1,0 +1,110 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1791734076,
+        "narHash": "sha256-i5qk1kLiit98rRbh1AXmWBNT9QXC/y4l5Wk/u5EdpDQ=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "7fd4004d0511991fff3a0524856a9be09e28c5f0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_2": {
+      "locked": {
+        "lastModified": 1790185690,
+        "narHash": "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "4975466d324710c576dc11ad614684e6bd8cad8e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_3": {
+      "locked": {
+        "lastModified": 1790463110,
+        "narHash": "sha256-hKlVl12B1dF0Q5vd9dY3lIJM5mFGWYSlXwSLAqHZ1+s=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "smk": "smk",
+        "trees": "trees"
+      }
+    },
+    "smk": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_2",
+        "trees": [
+          "trees"
+        ]
+      },
+      "locked": {
+        "dir": ".nix",
+        "lastModified": 1792489407,
+        "narHash": "sha256-JqcywAbKklfsF96VOjA0XKB3kbkiJmDi33pfoGMaHFI=",
+        "ref": "refs/heads/main",
+        "rev": "03ac8a9e86d4a654e7f1ff220e24e25e74aeab27",
+        "revCount": 735,
+        "type": "git",
+        "url": "ssh://git@git.reset.dev:2222/smk/smk-cli"
+      },
+      "original": {
+        "dir": ".nix",
+        "type": "git",
+        "url": "ssh://git@git.reset.dev:2222/smk/smk-cli"
+      }
+    },
+    "trees": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_3",
+        "smk": [
+          "smk"
+        ],
+        "trees": [
+          "trees"
+        ]
+      },
+      "locked": {
+        "dir": ".nix",
+        "lastModified": 1792490130,
+        "narHash": "sha256-ZbOaxbjA1wSgx3MBj3ucegM0H+6JdBpKeoNMGqGv0fY=",
+        "ref": "refs/heads/main",
+        "rev": "06636a9c165b4551fc93b31ace391b5a2231f4fa",
+        "revCount": 351,
+        "type": "git",
+        "url": "ssh://git@git.reset.dev:2222/smk/trees"
+      },
+      "original": {
+        "dir": ".nix",
+        "type": "git",
+        "url": "ssh://git@git.reset.dev:2222/smk/trees"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

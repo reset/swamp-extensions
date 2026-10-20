@@ -1,0 +1,22 @@
+manifestVersion: 1
+name: "@reset/steam"
+version: "2026.10.20.1"
+license: MIT
+description: Upload a game's builds to Steam and set them live on a branch.
+# Placeholder until the repository has a public home. The quality factor
+# repository-verified needs a public repository on github.com or a peer.
+repository: https://github.com/reset/swamp-ops
+paths:
+  base: manifest
+behaviors:
+  - steam.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+# Empty means every platform: steamcmd itself runs on Linux, macOS and
+# Windows, and the Web API methods need only the network.
+platforms: []
+labels:
+  - steam
+  - game-development
+  - publishing

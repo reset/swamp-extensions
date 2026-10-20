@@ -1,0 +1,10 @@
+type: '@reset/rollbar'
+typeVersion: 2026.10.20.1
+id: 4deaae18-8326-4ca9-8148-fadb04ffae80
+name: crashq
+version: 1
+tags: {}
+globalArguments:
+  host: 'https://crashq.karate.company'
+  token: '${{ vault.get(default, crashq-read-token) }}'
+methods: {}

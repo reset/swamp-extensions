@@ -1,0 +1,9 @@
+type: command/shell
+typeVersion: 2026.02.09.1
+id: 1b59a1bc-930f-475e-bf90-b6eb5b55b1fa
+name: disk-facts
+version: 1
+tags: {}
+globalArguments:
+  run: df -h /
+methods: {}

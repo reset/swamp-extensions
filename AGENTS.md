@@ -1,0 +1,59 @@
+# swamp-ops
+
+The one repository where SMK's stack and Swamp Club meet. It depends on both: smk and the dev shell
+for the repository's own checks, swamp for the workspace, behaviors, workflows and extensions. Neither
+depends on it, and that is the rule this repository exists to keep: no smk verb, skill or smkproj.toml
+field references Swamp, and nothing published from here calls the smk binary, reads smkproj.toml or
+loads the smk plugin. Work item: SMK-247. Plan: wiki page 3715. Field notes: 3716. Feedback for the
+Swamp team: 3717.
+
+## Rules
+
+- This is the only repository that carries `.swamp.yaml`. Game, client and service repositories never
+  do, and `swamp` is not run inside them: every swamp command sends telemetry to
+  telemetry.swamp-club.com (command path, argument names such as the behavior name, exit code,
+  duration, platform, the AI tool it detected). What one entry holds is on wiki page 3716.
+- Swamp is initialized with `--tool none`. Its two skills live in `.claude/skills/` here, copied from
+  the vendor's install of swamp 20261020.024627.0, so nothing of Swamp's loads in a session outside
+  this repository. Refresh them by hand from a new release; never let `swamp repo init` write into
+  `~/.claude/skills`.
+- Published extensions talk to documented interfaces only: the Rollbar-compatible crash API (Rollbar
+  itself, or crashq with one host change), steamcmd, Unity batch mode, Wwise's WAAPI, Forgejo's API.
+  Someone with Swamp and no SMK can use them on day one.
+- Publishing an extension, creating or renaming a collective, posting to the feed, joining the Discord
+  as reset and filing Lab issues or pull requests each need Jamie's explicit authorization. Friction
+  met while working here goes onto wiki page 3717, in the entry form that page describes.
+- Read Swamp's public manual and the vendor skills under `.claude/skills/`, not its AGPL source.
+
+## Layout
+
+- `extensions/behaviors/<name>/`: one published extension per directory, self-contained
+  (`manifest.yaml` with `paths.base: manifest`, source, tests, README, LICENSE).
+- `workflows/`: the workflows this repository runs. `models/`: behavior instances the workflows use.
+- `docs/`: field notes that become feed posts, kept here until they are published.
+- `.claude/skills/swamp`, `.claude/skills/swamp-getting-started`: the vendor's skills, verbatim.
+- `vaults/`: vault declarations (no secrets; `local_encryption` keeps its key under `.swamp/`, ignored).
+
+## Checks
+
+`make ci` runs smk's checks (`smk format --check`, `smk lint`, `smk typecheck`) and `bin/test`, which
+type-checks and tests every extension with Deno and validates every behavior instance and workflow with
+swamp. Deno is pinned in `.nix/flake.nix`; swamp is installed per machine from the Homebrew tap
+(`brew trust swamp-club/tap`, then `brew install swamp`) and is not in the dev shell, so `bin/test`
+fails with that message where swamp is absent. CI does not exist yet: the repository has no forge
+remote and no CI provider until Jamie names the repository and its owner.
+
+Extension work follows the vendor's lifecycle in `.claude/skills/swamp/references/extension/guide.md`:
+`deno check`, registration (`swamp behavior type search`), the adversarial review, unit tests,
+`swamp extension fmt --check`, `swamp extension quality`, and `swamp extension push --dry-run`. The
+push itself waits for authorization.
+
+## Privacy
+
+Crash occurrences read from crashq or Rollbar through the crash-reporting extension are data about
+players (install ids, device and OS facts, custom fields a game attached), and swamp stores what a
+method writes as versioned records under `.swamp/data/`, ignored by Git but kept on the machine that
+ran it. The controller for a studio's own games is the studio; for a client's game, the client.
+Open gaps for the privacy skill: a notice that this processing exists, an inventory of which fields
+each resource keeps (prefer counts and ids over payloads), the record lifetime and garbage-collection
+counts each resource declares, and how an erasure request reaches records stored here.

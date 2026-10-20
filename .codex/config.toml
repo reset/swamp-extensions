@@ -1,0 +1,3 @@
+# smk { overwrite: false }
+# Preserve the dev shell's PATH. Login profiles can put system tools ahead of it.
+allow_login_shell = false
