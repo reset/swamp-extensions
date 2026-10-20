@@ -1,0 +1,11 @@
+type: '@reset/unity'
+typeVersion: 2026.10.20.1
+id: 8596d335-2573-4d0c-af17-da94c3b141e3
+name: unity-project
+version: 1
+tags: {}
+globalArguments:
+  projectPath: unity
+  timeoutSeconds: 1800
+  logDir: .swamp/unity/logs
+methods: {}
