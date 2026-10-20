@@ -1,4 +1,4 @@
-# swamp-ops
+# smk-swamp
 
 The one repository where SMK's stack and Swamp Club meet. It depends on both: smk and the dev shell
 for the repository's own checks, swamp for the workspace, behaviors, workflows and extensions. Neither

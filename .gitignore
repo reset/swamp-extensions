@@ -1,4 +1,4 @@
-# smk { overwrite: false }
+# smk { overwrite: true }
 #########################################################################
 #
 #                 -- Generated with smk --
@@ -6,6 +6,31 @@
 #
 #########################################################################
 
+# git automatically ignores the git directory, but ripgrep needs this hint
+.git
+
+# Default output dirs
+tmp/
+out/
+pkg/
+
+# Environment config
+**/env/.env
+.vscode.env
+
+# Login secrets
+.tokens
+
+# runtime data
+.pid
+*.pid
+
+# Logs
+logs
+*.log
+
+# What smk proj writes beside a file the repository owns
+*.example
 
 # Nix
 .cache
@@ -17,30 +42,38 @@
 *.tfstate*
 *.tfvars
 *.secrets
+.vagrant
+
+# localstack
+.localstack
 
 # Editor files
 *.swp
 *.swo
+*~
+.idea/
+.history/
+.vs/
+.vsconfig
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 
-# Logs
-logs
-*.log
-
-# Default output dirs
-tmp/
-out/
+# Emacs
+.#*
 
 # OS created files
 .DS_Store
+Thumbs.db
 
-# smk
-*.example
+# Each language's rules follow, one block per language in smkproj.toml's Languages: listing a language adds its
+# block, dropping it removes the block, and neither touches another language's.
+# smk: each language's lines follow
 
-# BEGIN swamp managed section - DO NOT EDIT
-
-# Runtime data (not needed in version control)
+# Everything above is smk's, rewritten on every render. The lines below the next one are this repository's,
+# and every render keeps them; a `!` line there re-includes what smk ignores above.
+# smk: this repository's own lines follow
 .swamp/
-
-# Local extension sources (developer-specific, not shared)
 .swamp-sources.yaml
-# END swamp managed section

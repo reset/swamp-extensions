@@ -1,13 +1,13 @@
 # smk { overwrite: true }
 # Common shell tools from smk-shell-tools.nix and the checkers smk runs for every language, whatever the
-# repository's CodeLanguage: a Unity repository holds Python, PowerShell, Terraform and shell too, and smk
+# repository's Languages: a Unity repository holds Python, PowerShell, Terraform and shell too, and smk
 # runs each file's tool or fails naming it. Rewritten on every render, so a tool
 # smk adds reaches the repository with its next render. A tool that needs a language's own toolchain (dotnet
-# format, terraform fmt, gofmt, ktlint's Java) comes with that language's packages in flake.nix, which imports
+# format, terraform fmt, gofmt, ktlint's Java) comes with that language's block in smk.nix, which imports
 # this:
 #
 #   smkTools = import ./smk-tools.nix { inherit pkgs; };
-#   default = pkgs.mkShell (smkTools.env // { buildInputs = smkTools.packages ++ [ ... ]; });
+#   packages = smkTools.packages ++ [ ... ];
 { pkgs }:
 let
   # PSScriptAnalyzer formats and lints PowerShell, and ships only as a PowerShell Gallery module, which is a nupkg
