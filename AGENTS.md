@@ -27,6 +27,10 @@ Swamp team: 3717.
   publishes; they need not be able to build it. Nothing private goes in: no credentials, no personal
   data, instances reference vault keys by name, and the forge's address in the dev shell is the only
   internal hostname it carries.
+- The origin is <https://github.com/reset/swamp-extensions>; there is no copy on the forge. Pull requests
+  open with `smk pr create` and merge with `gh pr merge --merge` once `make ci` has passed on the branch:
+  neither `smk pr merge` nor automerge acts on GitHub. buildq, automerge and workq reaching a GitHub
+  repository is SMK-253, with this repository as its test.
 - Read Swamp's public manual and the vendor skills under `.claude/skills/`, not its AGPL source.
 
 ## Layout
@@ -45,7 +49,8 @@ Swamp team: 3717.
 type-checks and tests every extension with Deno and validates every behavior instance and workflow with
 swamp. Deno is pinned in `.nix/flake.nix`; swamp is installed per machine from the Homebrew tap
 (`brew trust swamp-club/tap`, then `brew install swamp`) and is not in the dev shell, so `bin/test`
-fails with that message where swamp is absent. buildq runs `make ci` through `.buildq/pipeline.yml`.
+fails with that message where swamp is absent. `.buildq/pipeline.yml` is what buildq runs once it builds
+from GitHub (SMK-253); until then `make ci` runs on the branch before its pull request opens.
 
 Extension work follows the vendor's lifecycle in `.claude/skills/swamp/references/extension/guide.md`:
 `deno check`, registration (`swamp behavior type search`), the adversarial review, unit tests,
