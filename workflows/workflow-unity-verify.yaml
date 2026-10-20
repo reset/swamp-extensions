@@ -1,0 +1,75 @@
+id: f43a3778-8849-48f3-ab89-264327d5eafd
+name: unity-verify
+description: |-
+  Compile the Unity project, fail on compiler errors, run its tests and
+  fail when any test failed.
+version: 1
+tags: {}
+inputs:
+  properties:
+    platform:
+      type: string
+      default: EditMode
+      description: EditMode or PlayMode, the Test Framework's -testPlatform.
+    maxWarnings:
+      type: integer
+      default: 1000
+      description: |-
+        The run fails when the compiler warning count reaches this number.
+        The default allows any.
+  required: []
+jobs:
+  - name: verify
+    description: Compile, assert the project is clean, test, assert no failures
+    steps:
+      - name: compile
+        description: Open the project in batch mode and read the compiler diagnostics
+        task:
+          type: behavior
+          behavior: unity-project
+          methodName: compile
+      - name: compiles
+        description: No compiler errors, and fewer warnings than the limit
+        dependsOn:
+          - step: compile
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: |-
+            int(data.latest("unity-project", "compile").attributes.errorCount) == 0
+            && int(data.latest("unity-project", "compile").attributes.warningCount)
+            < int(inputs.maxWarnings)
+          message: |-
+            ${{ data.latest("unity-project", "compile").attributes.errorCount }}
+            compiler errors and
+            ${{ data.latest("unity-project", "compile").attributes.warningCount }}
+            warnings (limit ${{ inputs.maxWarnings }})
+          severity: high
+      - name: test
+        description: Run the tests with the Unity Test Framework
+        dependsOn:
+          - step: compiles
+            condition:
+              type: succeeded
+        task:
+          type: behavior
+          behavior: unity-project
+          methodName: test
+          inputs:
+            platform: ${{ inputs.platform }}
+      - name: tests-pass
+        description: Every test case passed or was skipped
+        dependsOn:
+          - step: test
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: |-
+            int(data.latest("unity-project", "test").attributes.failed) == 0
+          message: |-
+            ${{ data.latest("unity-project", "test").attributes.failed }} of
+            ${{ data.latest("unity-project", "test").attributes.total }}
+            tests failed
+          severity: high
