@@ -50,36 +50,18 @@
           smk = inputs.smk.packages.${system}.smk;
           # Managed git worktrees, one per task (smk/trees): `trees add <name>`.
           trees = inputs.trees.packages.${system}.trees;
-          # The formatters, linters and type checker smk runs, for every language, from smk-tools.nix, which
-          # smk rewrites on every render.
-          smkTools = import ./smk-tools.nix { inherit pkgs; };
+          # smk's tools, each language's toolchain and smk's variables, from smk.nix, which smk rewrites on every
+          # render. This repository's own packages join them as
+          # `buildInputs = smkShell.packages ++ (with pkgs; [ ... ]);`.
+          smkShell = import ./smk.nix { inherit pkgs smk trees; };
         in
         {
           default = pkgs.mkShell (
-            smkTools.env
+            smkShell.env
             // {
-              SMK_ZSH_COMPLETIONS = "${smk}/share/zsh/site-functions";
-              buildInputs =
-                (with pkgs; [
-                  cacert
-                  curl
-                  # Deno runs, type-checks and tests the Swamp extensions under extensions/; swamp's own bundled
-                  # copy lives outside the repository (~/.swamp/deno), so the shell pins its own.
-                  deno
-                  direnv
-                  git
-                  gnumake
-                  jq
-                  openssh
-                  terraform
-                  which
-                  wget
-                ])
-                ++ smkTools.packages
-                ++ [
-                  smk
-                  trees
-                ];
+              # Deno runs, type-checks and tests the Swamp extensions under extensions/; swamp's own bundled
+              # copy lives outside the repository (~/.swamp/deno), so the shell pins its own.
+              buildInputs = smkShell.packages ++ (with pkgs; [ deno ]);
             }
           );
         }

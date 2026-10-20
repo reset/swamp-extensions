@@ -1,6 +1,5 @@
-Name = "swamp-ops"
+Name = "smk-swamp"
 Description = "Swamp Club workspace, workflows and extension sources for SMK's game-development vertical"
-CodeLanguage = "Shell"
 MasterBranch = "main"
 BaseDir = "."
 Domain = ""
@@ -13,6 +12,7 @@ BaseDomain = ""
 Features = ["nixshell"]
 BootstrapComplete = false
 BootstrapOnly = ["src/.*", "public/.*"]
+Languages = ["Shell"]
 [Ci]
 Provider = ""
 [Ci.Settings]

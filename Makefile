@@ -22,12 +22,14 @@ SHELL := bash
 # smk's checks: format, lint, types and the commit hook, rewritten on every render. ci runs them
 # through `checks`, which smkproj.toml's Checks chooses.
 include $(ROOT_DIR)/.smk/checks.mk
+# Each language's build, test and clean (.smk/lang/) and each feature's targets (.smk/features/), hooked in by
+# prerequisite; Shell's test runs bin/test.
+include $(ROOT_DIR)/.smk/targets.mk
 
 ###############################################################################
 #                                   Build                                     #
 ###############################################################################
 test:
-	$(BIN_DIR)/test
 
 
 # The one command a CI runner calls: everything a change must pass before it merges. A shell repo

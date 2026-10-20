@@ -5,7 +5,7 @@ license: MIT
 description: Upload a game's builds to Steam and set them live on a branch.
 # Placeholder until the repository has a public home. The quality factor
 # repository-verified needs a public repository on github.com or a peer.
-repository: https://github.com/reset/swamp-ops
+repository: https://github.com/reset/smk-swamp
 paths:
   base: manifest
 behaviors:
