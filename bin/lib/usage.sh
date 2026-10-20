@@ -1,7 +1,6 @@
 # shellcheck shell=bash
-# Copyright (C) 2026 Jamie Stormbreaker - All Rights Reserved
-# Unauthorized copying of this file, via any medium is strictly prohibited
-# Proprietary and confidential
+# Copyright (C) 2026 Jamie Stormbreaker
+# SPDX-License-Identifier: MIT
 # smk { overwrite: true }
 #
 # --help and --describe for every script in bin/, both rendered from the script's own header comment by
