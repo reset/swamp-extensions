@@ -1,0 +1,11 @@
+type: '@reset/fmod'
+typeVersion: 2026.10.20.1
+id: daa5259b-0333-4751-963b-085358ff8b1f
+name: fmod-examples
+version: 1
+tags: {}
+globalArguments:
+  project: audio/Examples.fspro
+  fmodstudio: fmodstudiocl
+  timeoutSeconds: 1800
+methods: {}
