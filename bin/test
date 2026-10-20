@@ -36,7 +36,8 @@ if ((${#sources[@]} > 0)); then
     for f in "${sources[@]}"; do [[ $f == *_test.ts ]] && tests+=("$f"); done
     if ((${#tests[@]} > 0)); then
         echo "deno test: ${#tests[@]} files"
-        deno test "${tests[@]}" || failed=1
+        # Loopback only: an extension that speaks a socket protocol proves it against an in-process server.
+        deno test --allow-net=127.0.0.1 "${tests[@]}" || failed=1
     fi
 fi
 

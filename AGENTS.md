@@ -33,6 +33,10 @@ Swamp team: 3717.
   neither `smk pr merge` nor automerge acts on GitHub. buildq, automerge and workq reaching a GitHub
   repository is SMK-253, with this repository as its test.
 - Read Swamp's public manual and the vendor skills under `.claude/skills/`, not its AGPL source.
+- Nothing the studio relies on runs only here. Every workflow in `workflows/` is a flight of a
+  workload whose relied-on path is SMK's, named in `docs/workloads.md`; the flight runs beside it
+  and is measured, never substituted for it. Records worth keeping are exported to SMK's own
+  store, so this repository, its schedules and Swamp's data layer can be dropped without loss.
 
 ## Layout
 
