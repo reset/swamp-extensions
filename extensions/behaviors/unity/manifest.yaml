@@ -1,0 +1,26 @@
+manifestVersion: 1
+name: "@reset/unity"
+version: "2026.10.20.1"
+license: MIT
+description: |-
+  Drive the Unity Editor in batch mode with its documented command-line
+  arguments: resolve the project's editor, compile and read the compiler
+  diagnostics, run the Unity Test Framework and read its NUnit results,
+  and run a project's build method, each written as a resource a workflow
+  can assert on.
+repository: https://github.com/reset/swamp-extensions
+paths:
+  base: manifest
+behaviors:
+  - unity.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+labels:
+  - unity
+  - game-development
+  - testing
+  - build
+# Empty means every platform: Unity Hub installs the editor on Linux, macOS
+# and Windows, and the behavior knows the default location on each.
+platforms: []
