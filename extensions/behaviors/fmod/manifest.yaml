@@ -1,0 +1,25 @@
+manifestVersion: 1
+name: "@reset/fmod"
+version: "2026.10.20.1"
+license: MIT
+description: |-
+  Drive FMOD Studio's command line tool from Swamp: build banks for named
+  platforms, list the project's platforms, banks and events through the
+  scripting API, and run the tool's project validation, each recorded as a
+  resource a workflow can assert on.
+repository: https://github.com/reset/swamp-extensions
+paths:
+  base: manifest
+behaviors:
+  - fmod.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+# Empty means every platform: FMOD Studio ships its command line tool for
+# Windows, macOS and Linux, and the behavior starts it on each.
+platforms: []
+labels:
+  - fmod
+  - audio
+  - game-development
+  - build

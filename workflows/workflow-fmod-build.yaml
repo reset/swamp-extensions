@@ -1,0 +1,67 @@
+id: e3f6c079-301f-42b0-9019-79ca19afa65b
+name: fmod-build
+description: Check a bank exists in the FMOD Studio project, build it for a platform, assert the platform was built.
+version: 1
+tags: {}
+inputs:
+  properties:
+    bank:
+      type: string
+      description: The bank to build, as the banks browser names it
+    platform:
+      type: string
+      default: Desktop
+      description: The platform to build for, as the project's build preferences name it
+  required:
+    - bank
+jobs:
+  - name: build
+    description: Inspect the project, build one bank for one platform
+    steps:
+      - name: inspect
+        description: List the project's platforms, banks and events through the scripting API
+        task:
+          type: behavior
+          behavior: fmod-examples
+          methodName: inspect
+      - name: bank-exists
+        description: The tool refuses an unknown bank; say so before starting the build
+        dependsOn:
+          - step: inspect
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: |-
+            inputs.bank in
+            data.latest("fmod-examples", "banks").attributes.names
+          message: Bank ${{ inputs.bank }} is not in the project
+          severity: high
+      - name: build
+        description: Build the bank for the platform with fmodstudiocl -build
+        dependsOn:
+          - step: bank-exists
+            condition:
+              type: succeeded
+        task:
+          type: behavior
+          behavior: fmod-examples
+          methodName: build
+          inputs:
+            banks:
+              - ${{ inputs.bank }}
+            platforms:
+              - ${{ inputs.platform }}
+      - name: platform-built
+        description: The build record names every platform the tool prepared
+        dependsOn:
+          - step: build
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: |-
+            inputs.platform in
+            data.latest("fmod-examples", "build").attributes.platformsBuilt
+          message: ${{ inputs.platform }} was not built
+          severity: high
