@@ -25,8 +25,9 @@ Swamp team: 3717.
   met while working here goes onto wiki page 3717, in the entry form that page describes.
 - This repository is public, with the full smk tooling and dev shell. Others read it and consume what it
   publishes; they need not be able to build it. Nothing private goes in: no credentials, no personal
-  data, instances reference vault keys by name, and the forge's address in the dev shell is the only
-  internal hostname it carries.
+  data, no company or client name (the repository speaks for a studio, not for one), instances
+  reference vault keys by name, and the forge's address in the dev shell is the only internal
+  hostname it carries.
 - The origin is <https://github.com/reset/swamp-extensions>; there is no copy on the forge. Pull requests
   open with `smk pr create` and merge with `gh pr merge --merge` once `make ci` has passed on the branch:
   neither `smk pr merge` nor automerge acts on GitHub. buildq, automerge and workq reaching a GitHub
