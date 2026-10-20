@@ -1,0 +1,24 @@
+manifestVersion: 1
+name: "@reset/godot"
+version: "2026.10.20.1"
+license: MIT
+description: |-
+  Drive the Godot 4 editor headlessly from its documented command line:
+  read the engine version and project settings, reimport assets, read
+  the export presets, export a preset and parse GDScript files, each
+  written as a resource a workflow can assert on.
+repository: https://github.com/reset/swamp-extensions
+paths:
+  base: manifest
+behaviors:
+  - godot.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+labels:
+  - godot
+  - game-development
+  - build
+# Empty means every platform: the Godot editor binary runs on Linux, macOS
+# and Windows, and the behavior only runs it and reads the project's files.
+platforms: []

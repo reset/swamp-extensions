@@ -1,0 +1,11 @@
+type: '@reset/godot'
+typeVersion: 2026.10.20.1
+id: 5bfcc0d6-a30a-407a-98db-dd0351b7cf4a
+name: godot-game
+version: 1
+tags: {}
+globalArguments:
+  projectPath: extensions/behaviors/godot/example-project
+  godot: godot
+  timeoutSeconds: 1800
+methods: {}

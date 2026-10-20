@@ -1,0 +1,105 @@
+id: a71cfa57-ffe6-41a3-9e51-62b1ed851eb1
+name: godot-build
+description: |-
+  Reimport a Godot project, parse its scripts, fail when either printed
+  errors, then export a preset and check the produced file.
+version: 1
+tags: {}
+inputs:
+  properties:
+    preset:
+      type: string
+      default: Linux
+      description: Name of an export preset in the project's export_presets.cfg
+    path:
+      type: string
+      default: ../build/linux/game.x86_64
+      description: Output file, relative to the project directory or absolute
+    mode:
+      type: string
+      default: release
+      description: release, debug or pack, the export flag to run
+    scripts:
+      type: array
+      default:
+        - player.gd
+      description: GDScript files to parse, as res:// paths relative to the project
+  required: []
+jobs:
+  - name: build
+    description: Import, parse the scripts, assert both were clean, export
+    steps:
+      - name: import
+        description: Reimport the project's assets with --headless --import
+        task:
+          type: model_method
+          modelIdOrName: godot-game
+          methodName: import
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: check
+        description: Parse each script with --check-only
+        task:
+          type: model_method
+          modelIdOrName: godot-game
+          methodName: check
+          inputs:
+            scripts: ${{ inputs.scripts }}
+        dependsOn:
+          - step: import
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: clean
+        description: The import printed no error lines and every script parsed
+        task:
+          type: assert
+          expr: |-
+            int(data.latest("godot-game", "import").attributes.errorCount) == 0
+            && int(data.latest("godot-game", "check").attributes.failed) == 0
+          message: |-
+            ${{ data.latest("godot-game", "import").attributes.errorCount }}
+            import error lines,
+            ${{ data.latest("godot-game", "check").attributes.failed }}
+            scripts failed to parse
+          severity: high
+        dependsOn:
+          - step: check
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: export
+        description: Export the preset and record the produced file
+        task:
+          type: model_method
+          modelIdOrName: godot-game
+          methodName: export
+          inputs:
+            preset: ${{ inputs.preset }}
+            path: ${{ inputs.path }}
+            mode: ${{ inputs.mode }}
+        dependsOn:
+          - step: clean
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: produced
+        description: The export wrote a non-empty file
+        task:
+          type: assert
+          expr: |-
+            int(data.latest("godot-game", "export").attributes.fileSize) > 0
+          message: the export produced an empty file
+          severity: high
+        dependsOn:
+          - step: export
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+    dependsOn: []
+    weight: 0
