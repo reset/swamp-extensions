@@ -1,4 +1,4 @@
-Name = "smk-swamp"
+Name = "swamp-extensions"
 Description = "Swamp Club workspace, workflows and extension sources for SMK's game-development vertical"
 MasterBranch = "main"
 BaseDir = "."
