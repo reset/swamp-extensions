@@ -11,7 +11,7 @@
 { pkgs }:
 let
   # PSScriptAnalyzer formats and lints PowerShell, and ships only as a PowerShell Gallery module, which is a nupkg
-  # (a zip), so this unpacks it into a module directory (rog's .nix/flake.nix did this first). Bump the version and
+  # (a zip), so this unpacks it into a module directory. Bump the version and
   # the hash together; nix store prefetch-file <url> prints the hash.
   psScriptAnalyzer = pkgs.stdenvNoCC.mkDerivation rec {
     pname = "PSScriptAnalyzer";
@@ -49,7 +49,7 @@ let
     };
   });
   # clang-tools wraps each tool in a bash script that adds the toolchain's include paths (clang-tidy and clangd need
-  # them). Some nixpkgs revisions (rog's 4975466d of 2026-09-23 among them; 151fa4e8 is fixed) build it with strictDeps
+  # them). Some nixpkgs revisions (151fa4e8 fixed it) build it with strictDeps
   # and no shell in buildInputs, so patchShebangs leaves the wrapper's `#!/bin/sh` alone, and where /bin/sh is dash
   # (Ubuntu) every call prints `[[: not found` and adds no include path. A shell in buildInputs lets patchShebangs point
   # the wrapper at bash, as the fixed nixpkgs does; a fixed revision already has one and keeps the cached package.
