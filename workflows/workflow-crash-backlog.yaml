@@ -1,0 +1,55 @@
+id: 4404c15d-bbe1-464b-b693-1eb8ce2ffb11
+name: crash-backlog
+description: |-
+  List the active crash items and fail when more of them than the
+  threshold allows are at level error or critical.
+version: 1
+tags: {}
+inputs:
+  properties:
+    threshold:
+      type: integer
+      default: 1
+      description: |-
+        The run fails when the count of active items at level error or
+        critical reaches this number. The default allows none.
+    pages:
+      type: integer
+      default: 1
+      description: How many pages of 100 items to list.
+  required: []
+jobs:
+  - name: backlog
+    description: List active items and check the backlog against the threshold
+    steps:
+      - name: list-active
+        description: Active items, with a summary by level and status
+        task:
+          type: model_method
+          modelIdOrName: crashq
+          methodName: items
+          inputs:
+            status: active
+            pages: ${{ inputs.pages }}
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: under-threshold
+        description: Active error and critical items stay below the threshold
+        task:
+          type: assert
+          expr: |-
+            int(data.latest("crashq", "summary").attributes.activeErrors)
+            < int(inputs.threshold)
+          message: |-
+            ${{ data.latest("crashq", "summary").attributes.activeErrors }}
+            active error or critical items, threshold ${{ inputs.threshold }}
+          severity: high
+        dependsOn:
+          - step: list-active
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+    dependsOn: []
+    weight: 0

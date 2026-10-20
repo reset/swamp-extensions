@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "smk-agents": {
+      "source": {
+        "source": "git",
+        "url": "ssh://git@git.reset.dev:2222/smk/smk-agents.git"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "smk@smk-agents": true
+  }
+}

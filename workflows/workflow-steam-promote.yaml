@@ -1,0 +1,69 @@
+id: b2637e5c-c6c8-4dd3-a911-ba836e3c7a17
+name: steam-promote
+description: Check a Steam build, wait for approval, set it live on a branch.
+version: 1
+tags: {}
+inputs:
+  properties:
+    buildId:
+      type: integer
+      description: The BuildID to promote, as upload or builds reported it
+    branch:
+      type: string
+      default: beta
+      description: Branch to set live on. public is the default branch.
+    note:
+      type: string
+      default: Promoted by the steam-promote workflow
+      description: Note recorded with the change in Steamworks
+  required:
+    - buildId
+jobs:
+  - name: promote
+    description: Check the build, wait for approval, set it live
+    steps:
+      - name: builds
+        description: Read the newest 100 builds Steam committed for the app
+        task:
+          type: behavior
+          behavior: steam-app
+          methodName: builds
+          inputs:
+            count: 100
+      - name: build-exists
+        description: Steam lists only committed builds, so listed means success
+        dependsOn:
+          - step: builds
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: |-
+            inputs.buildId in
+            data.latest("steam-app", "builds").attributes.buildIds
+          message: Build ${{ inputs.buildId }} is not among the newest builds
+          severity: high
+      - name: approve
+        description: A person confirms the build and branch before it goes live
+        dependsOn:
+          - step: build-exists
+            condition:
+              type: succeeded
+        task:
+          type: manual_approval
+          prompt: Set build ${{ inputs.buildId }} live on ${{ inputs.branch }}?
+          timeout: 86400
+      - name: set-live
+        description: Set the build live on the branch through SetAppBuildLive
+        dependsOn:
+          - step: approve
+            condition:
+              type: succeeded
+        task:
+          type: behavior
+          behavior: steam-app
+          methodName: setLive
+          inputs:
+            buildId: ${{ inputs.buildId }}
+            branch: ${{ inputs.branch }}
+            description: ${{ inputs.note }}

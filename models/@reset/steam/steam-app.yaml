@@ -1,0 +1,13 @@
+type: '@reset/steam'
+typeVersion: 2026.10.20.1
+id: 80b73571-fef6-4922-8637-62dc1cd0d800
+name: steam-app
+version: 1
+tags: {}
+globalArguments:
+  appId: 480
+  username: steam-build-account
+  password: '${{ vault.get(default, STEAM_PASSWORD) }}'
+  webApiKey: '${{ vault.get(default, STEAM_WEB_API_KEY) }}'
+  contentRoot: build/StandaloneLinux64
+methods: {}

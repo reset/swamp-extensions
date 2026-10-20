@@ -1,0 +1,9 @@
+type: command/shell
+typeVersion: 2026.02.09.1
+id: 02043631-155a-4d1e-bf33-b23b6155c59a
+name: host-facts
+version: 1
+tags: {}
+globalArguments:
+  run: uname -a
+methods: {}

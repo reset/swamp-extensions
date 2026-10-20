@@ -1,0 +1,23 @@
+# smk { overwrite: true }
+# Settings for trees (smk/trees), managed git worktrees, in git-config format and read with `git config --file`.
+# Trees live in ../<repo>-trees/<name> by default; set tree.root to put them elsewhere.
+
+[branch]
+	# worktree/<name>, so a tree's branch is obvious from its name.
+	prefix = worktree/
+
+[base]
+	# Branch from the remote's main, not from HEAD, which is whatever the main checkout happens to
+	# be on. A full ref: given a short name with no local branch of that name, git makes one of its
+	# own, discards the -b it was given, and exits 0.
+	ref = refs/remotes/origin/main
+
+[add]
+	# A tree whose .trees.d/post-add hook fails stays, for the failed step to be finished by hand: the
+	# steps are recoverable (direnv allow, a cache clone), and a full checkout of a large repository is
+	# too costly to delete over one of them.
+	rollback = false
+
+# Everything above is smk's, rewritten on every render. The settings below the next line are this
+# repository's, and every render keeps them; a key there overrides the same key above, as git-config does.
+# smk: this repository's own lines follow

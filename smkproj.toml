@@ -1,0 +1,31 @@
+Name = "swamp-ops"
+Description = "Swamp Club workspace, workflows and extension sources for SMK's game-development vertical"
+CodeLanguage = "Shell"
+MasterBranch = "main"
+BaseDir = "."
+Domain = ""
+UnityProject = ""
+Namespace = ""
+Owner = "smk"
+TfStateStorageAccount = ""
+SsmPrefix = ""
+BaseDomain = ""
+Features = ["nixshell"]
+BootstrapComplete = false
+BootstrapOnly = ["src/.*", "public/.*"]
+[Ci]
+Provider = ""
+[Ci.Settings]
+[License]
+Kind = "Proprietary"
+Holder = "Jamie Stormbreaker"
+Year = 2026
+[Issue]
+Provider = "workq"
+Project = "SMK"
+Workspace = "smk"
+[Format]
+# The vendor's skills are copied verbatim from the swamp install (AGENTS.md); their Markdown is theirs to format.
+# Extension sources are Deno's: deno fmt, deno lint and deno check run them from bin/test, and the vendor's
+# `swamp extension fmt --check` is the publish gate, so biome stays off them.
+Exclude = [".claude/skills/**", "extensions/**"]

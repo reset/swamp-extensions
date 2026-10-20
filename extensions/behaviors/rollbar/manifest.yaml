@@ -1,0 +1,23 @@
+manifestVersion: 1
+name: "@reset/rollbar"
+version: "2026.10.20.1"
+license: MIT
+description: |-
+  Drive a Rollbar-compatible crash-reporting API (api.rollbar.com, or
+  crashq with one host change): list and read items and occurrences,
+  resolve, mute and assign items, and record deploys, each written as a
+  resource a workflow can assert on.
+repository: https://github.com/reset/swamp-ops
+paths:
+  base: manifest
+behaviors:
+  - rollbar.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+labels:
+  - crash-reporting
+  - rollbar
+  - observability
+# Empty: the behavior is plain fetch and runs wherever swamp does.
+platforms: []

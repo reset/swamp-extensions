@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# smk { overwrite: true }
+#
+# Checks the staged files' formatting, as the index holds them, and changes nothing. On a difference
+# it stops the commit: run `smk format`, review what changed, and stage again. Git (2.54+) runs it
+# once `git config hook.smk-format.event pre-commit` and
+# `git config hook.smk-format.command .githooks/pre-commit` register it, which `make hooks` does where
+# the Makefile has that target. `git commit --no-verify` skips it, and CI runs the same check on every
+# push.
+
+set -euo pipefail
+
+# THE REPOSITORY'S OWN DEV SHELL, WHEREVER THE COMMIT COMES FROM. An smk found on PATH may be another
+# checkout's, or one installed outside any dev shell, without the formatters this repository pins: a
+# commit from an agent's or an IDE's shell then failed on a missing prettier rather than on its formatting.
+# direnv builds the shell from .envrc, the same smk and formatters CI runs, and is quick when it is current.
+top="$(git rev-parse --show-toplevel)"
+if command -v direnv >/dev/null 2>&1 && [[ -f "$top/.envrc" ]]; then
+  exec direnv exec "$top" smk format --check --staged
+fi
+if command -v smk >/dev/null 2>&1; then
+  exec smk format --check --staged
+fi
+echo >&2 "pre-commit: neither direnv (with this repository's .envrc) nor smk is here to check the staged files; enter the dev shell (direnv allow) and commit again."
+exit 1

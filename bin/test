@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# smk { overwrite: false }
+#########################################################################
+#
+#                 -- Generated with smk --
+#      (do not edit unless you know what you're doing)
+#
+#########################################################################
+#
+# The repo's tests, which `make test` and `make ci` run: every extension type-checks and its unit
+# tests pass under Deno, and every behavior instance and workflow validates under swamp. Deno comes
+# from the dev shell; swamp is installed per machine (AGENTS.md "Checks"), and its absence fails the
+# run rather than passing it silently.
+#
+# Exit: 0 when every check passed, 1 when any failed or a tool is missing.
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$root"
+failed=0
+
+if ! command -v deno >/dev/null 2>&1; then
+    echo "bin/test: deno is not on PATH; enter the dev shell (direnv allow)" >&2
+    exit 1
+fi
+
+sources=()
+while IFS= read -r -d '' f; do sources+=("$f"); done < <(find extensions -name '*.ts' -print0 2>/dev/null | sort -z)
+if ((${#sources[@]} > 0)); then
+    echo "deno check: ${#sources[@]} files"
+    deno check "${sources[@]}" || failed=1
+    deno fmt --check "${sources[@]}" || failed=1
+    deno lint "${sources[@]}" || failed=1
+    tests=()
+    for f in "${sources[@]}"; do [[ $f == *_test.ts ]] && tests+=("$f"); done
+    if ((${#tests[@]} > 0)); then
+        echo "deno test: ${#tests[@]} files"
+        deno test "${tests[@]}" || failed=1
+    fi
+fi
+
+if ! command -v swamp >/dev/null 2>&1; then
+    echo "bin/test: swamp is not on PATH; behaviors and workflows were not validated (AGENTS.md, Checks)" >&2
+    exit 1
+fi
+
+for f in models/*/*/*.yaml; do
+    [[ -f $f ]] || continue
+    name=$(basename "$f" .yaml)
+    echo "swamp behavior validate $name"
+    swamp behavior validate "$name" --quiet || failed=1
+done
+for f in workflows/*.yaml; do
+    [[ -f $f ]] || continue
+    name=$(sed -n 's/^name: *//p' "$f" | head -1)
+    echo "swamp workflow validate $name"
+    swamp workflow validate "$name" --quiet || failed=1
+done
+
+exit "$failed"

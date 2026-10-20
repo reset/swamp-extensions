@@ -1,0 +1,46 @@
+id: 9e374494-1b4b-4ccf-b194-21fc9b29b744
+name: host-report
+tags: {}
+jobs:
+  - name: main
+    description: Main job (edit or replace)
+    steps:
+      - name: host
+        description: Kernel and host name
+        task:
+          type: model_method
+          modelIdOrName: host-facts
+          methodName: execute
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: disk
+        description: Root volume usage
+        task:
+          type: model_method
+          modelIdOrName: disk-facts
+          methodName: execute
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: check
+        description: Both commands exited zero
+        task:
+          type: assert
+          expr: |-
+            data.latest("host-facts", "result").attributes.exitCode == 0
+            && data.latest("disk-facts", "result").attributes.exitCode == 0
+          message: a host fact command failed
+          severity: high
+        dependsOn:
+          - step: host
+            condition:
+              type: succeeded
+          - step: disk
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+    dependsOn: []
+    weight: 0
+version: 1

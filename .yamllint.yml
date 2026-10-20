@@ -1,0 +1,5 @@
+# smk { overwrite: true }
+extends: default
+rules:
+  # yamlfmt removes the optional document-start marker.
+  document-start: disable

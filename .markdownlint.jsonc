@@ -1,0 +1,11 @@
+// smk { overwrite: true }
+{
+  // Prettier owns layout, including tables and long links.
+  "MD013": false,
+  // An example keeps the indentation its own formatter writes, and these languages' formatters
+  // (gdformat, stylua, gofmt) and make itself indent with tabs. Every other language's examples
+  // use spaces.
+  "MD010": { "ignore_code_languages": ["gdscript", "go", "lua", "make"] },
+  // An agent skill's SKILL.md is titled by its front matter `name`, which is what a harness shows.
+  "MD041": { "front_matter_title": "^\\s*name\\s*[:=]" }
+}
