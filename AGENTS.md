@@ -62,7 +62,7 @@ push itself waits for authorization.
 Crash occurrences read from crashq or Rollbar through the crash-reporting extension are data about
 players (install ids, device and OS facts, custom fields a game attached), and swamp stores what a
 method writes as versioned records under `.swamp/data/`, ignored by Git but kept on the machine that
-ran it. The controller for One More Game's games is One More Game; for a client's game, the client.
+ran it. The controller for a studio's own games is the studio; for a client's game, the client.
 Open gaps for the privacy skill: a notice that this processing exists, an inventory of which fields
 each resource keeps (prefer counts and ids over payloads), the record lifetime and garbage-collection
 counts each resource declares, and how an erasure request reaches records stored here.
