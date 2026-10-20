@@ -1,0 +1,10 @@
+type: '@reset/wwise'
+typeVersion: 2026.10.20.1
+id: ff5ca3bf-3899-436a-915e-b2a41fdf2102
+name: wwise-local
+version: 1
+tags: {}
+globalArguments:
+  host: 'ws://127.0.0.1:8080/waapi'
+  timeoutSeconds: 30
+methods: {}

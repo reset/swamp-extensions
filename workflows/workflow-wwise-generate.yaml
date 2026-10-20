@@ -1,0 +1,81 @@
+id: e923de0e-9967-4a51-b13c-a8ffe6f71c42
+name: wwise-generate
+description: |-
+  Read the open Wwise project, generate its SoundBanks for the given
+  platforms, and fail when the generation log carries an error.
+version: 1
+tags: {}
+inputs:
+  properties:
+    banks:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Names of the user-defined SoundBanks to generate. Empty means all of them.
+    platforms:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Platform names to generate for. Empty means every platform.
+    warningsAllowed:
+      type: integer
+      default: 0
+      description: The run fails when the log carries more warnings than this.
+  required: []
+jobs:
+  - name: generate
+    description: Check a project is open, generate the SoundBanks, read the log
+    steps:
+      - name: info
+        description: Wwise and project facts, so a missing project fails early
+        task:
+          type: behavior
+          behavior: wwise-local
+          methodName: info
+      - name: project-open
+        description: A project is open in Wwise
+        dependsOn:
+          - step: info
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: |-
+            data.latest("wwise-local", "info").attributes.project != null
+          message: No project is open in Wwise
+          severity: high
+      - name: generate
+        description: Generate the SoundBanks and keep the log either way
+        dependsOn:
+          - step: project-open
+            condition:
+              type: succeeded
+        task:
+          type: behavior
+          behavior: wwise-local
+          methodName: generate
+          inputs:
+            banks: ${{ inputs.banks }}
+            platforms: ${{ inputs.platforms }}
+            failOnError: false
+      - name: clean-log
+        description: The generation succeeded with no more warnings than allowed
+        dependsOn:
+          - step: generate
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: |-
+            data.latest("wwise-local", "generation").attributes.succeeded &&
+            int(data.latest("wwise-local", "generation").attributes.counts.warnings)
+            <= int(inputs.warningsAllowed)
+          message: |-
+            SoundBank generation reported
+            ${{ data.latest("wwise-local", "generation").attributes.counts.errors }}
+            errors and
+            ${{ data.latest("wwise-local", "generation").attributes.counts.warnings }}
+            warnings, ${{ inputs.warningsAllowed }} allowed
+          severity: high

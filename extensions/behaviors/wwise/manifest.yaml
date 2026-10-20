@@ -1,0 +1,24 @@
+manifestVersion: 1
+name: "@reset/wwise"
+version: "2026.10.20.1"
+license: MIT
+description: |-
+  Drive an open Wwise Authoring instance through WAAPI over WAMP: read
+  Wwise and project facts, run WAQL queries, list Events and SoundBanks,
+  generate SoundBanks within a deadline and save the project, each written
+  as a resource a workflow can assert on.
+repository: https://github.com/reset/swamp-extensions
+paths:
+  base: manifest
+behaviors:
+  - wwise.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+labels:
+  - wwise
+  - audio
+  - game-development
+# Empty: the behavior is a WebSocket client and runs wherever swamp does;
+# Wwise Authoring itself runs on Windows, macOS and Linux.
+platforms: []
