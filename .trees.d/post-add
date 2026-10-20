@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Copyright (C) 2026 Jamie Stormbreaker - All Rights Reserved
-# Unauthorized copying of this file, via any medium is strictly prohibited
-# Proprietary and confidential
+# Copyright (C) 2026 Jamie Stormbreaker
+# SPDX-License-Identifier: MIT
 # smk { overwrite: true }
 # Makes a new tree usable: trusts its .envrc, then runs this repository's own steps. trees creates the
 # tree and knows git and nothing else; this hook is where the project says what else a tree needs.

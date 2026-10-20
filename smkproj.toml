@@ -17,7 +17,7 @@ Languages = ["Shell"]
 Provider = ""
 [Ci.Settings]
 [License]
-Kind = "Proprietary"
+Kind = "MIT"
 Holder = "Jamie Stormbreaker"
 Year = 2026
 [Issue]
