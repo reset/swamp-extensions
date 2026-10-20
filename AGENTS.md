@@ -28,7 +28,11 @@ Swamp team: 3717.
 ## Layout
 
 - `extensions/behaviors/<name>/`: one published extension per directory, self-contained
-  (`manifest.yaml` with `paths.base: manifest`, source, tests, README, LICENSE).
+  (`manifest.yaml` with `paths.base: manifest`, source, tests, README, LICENSE). Extension sources are
+  published from one public repository per collective, <https://github.com/reset/swamp-extensions> (Jamie's
+  decision, October 20, 2026), which every manifest names; how this repository consumes it (recommended: that
+  repository is the source of truth, plain Deno with no SMK dev shell or forge URL, vendored here as a git
+  submodule) is still Jamie's to decide, and the repository is not created yet.
 - `workflows/`: the workflows this repository runs. `models/`: behavior instances the workflows use.
 - `docs/`: field notes that become feed posts, kept here until they are published.
 - `.claude/skills/swamp`, `.claude/skills/swamp-getting-started`: the vendor's skills, verbatim.
