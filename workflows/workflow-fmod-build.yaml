@@ -1,6 +1,8 @@
 id: e3f6c079-301f-42b0-9019-79ca19afa65b
 name: fmod-build
-description: Check a bank exists in the FMOD Studio project, build it for a platform, assert the platform was built.
+description: |-
+  Check a bank exists in the FMOD Studio project, build it for a platform,
+  assert the platform was built.
 version: 1
 tags: {}
 inputs:
@@ -11,7 +13,9 @@ inputs:
     platform:
       type: string
       default: Desktop
-      description: The platform to build for, as the project's build preferences name it
+      description: |-
+        The platform to build for, as the project's build preferences name
+        it
   required:
     - bank
 jobs:
@@ -19,13 +23,17 @@ jobs:
     description: Inspect the project, build one bank for one platform
     steps:
       - name: inspect
-        description: List the project's platforms, banks and events through the scripting API
+        description: |-
+          List the project's platforms, banks and events through the
+          scripting API
         task:
           type: behavior
           behavior: fmod-examples
           methodName: inspect
       - name: bank-exists
-        description: The tool refuses an unknown bank; say so before starting the build
+        description: |-
+          The tool refuses an unknown bank; say so before starting the
+          build
         dependsOn:
           - step: inspect
             condition:

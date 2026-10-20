@@ -23,7 +23,8 @@ jobs:
     description: Compile, assert the project is clean, test, assert no failures
     steps:
       - name: compile
-        description: Open the project in batch mode and read the compiler diagnostics
+        description: |-
+          Open the project in batch mode and read the compiler diagnostics
         task:
           type: behavior
           behavior: unity-project
@@ -34,11 +35,13 @@ jobs:
           - step: compile
             condition:
               type: succeeded
+        # yamllint disable rule:line-length
         task:
           type: assert
           expr: |-
-            int(data.latest("unity-project", "compile").attributes.errorCount) == 0
-            && int(data.latest("unity-project", "compile").attributes.warningCount)
+            int(data.latest("unity-project", "compile").attributes.errorCount)
+            == 0 &&
+            int(data.latest("unity-project", "compile").attributes.warningCount)
             < int(inputs.maxWarnings)
           message: |-
             ${{ data.latest("unity-project", "compile").attributes.errorCount }}
