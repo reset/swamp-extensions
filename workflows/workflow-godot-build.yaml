@@ -23,7 +23,8 @@ inputs:
       type: array
       default:
         - player.gd
-      description: GDScript files to parse, as res:// paths relative to the project
+      description: |-
+        GDScript files to parse, as res:// paths relative to the project
   required: []
 jobs:
   - name: build
