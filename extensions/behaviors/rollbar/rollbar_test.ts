@@ -162,6 +162,62 @@ Deno.test("items sends the token header and filters, pages until a short page", 
   assertEquals(summary.count, 103);
 });
 
+/**
+ * Renders a log call the way Swamp's log line showed it: each `{name}`
+ * placeholder replaced by `String()` of its property.
+ */
+function rendered(log: { message: string; args: unknown[] }): string {
+  const props = (log.args[0] ?? {}) as Record<string, unknown>;
+  return log.message.replace(
+    /\{(\w+)\}/g,
+    (whole, name: string) => name in props ? String(props[name]) : whole,
+  );
+}
+
+Deno.test("items logs its filters readably and never the token", async () => {
+  const { context, getLogs } = testContext({ environment: "production" });
+  await withMockedFetch(
+    () => envelope({ page: 1, items: [rawItem(1, "error")] }),
+    () =>
+      behavior.methods.items.execute(
+        {
+          status: "active",
+          level: "error",
+          query: "NullReference",
+          page: 1,
+          pages: 1,
+        },
+        context,
+      ),
+  );
+  const listing = getLogs().map(rendered).find((line) =>
+    line.startsWith("Listing items")
+  );
+  assert(listing !== undefined, "the listing line is logged");
+  assertFalse(listing.includes("[object Object]"), listing);
+  assertStringIncludes(
+    listing,
+    'filters status=active, level=error, environment=production, query="NullReference"',
+  );
+  for (const log of getLogs()) {
+    assertFalse(JSON.stringify([log.message, log.args]).includes(TOKEN));
+  }
+
+  const bare = testContext();
+  await withMockedFetch(
+    () => envelope({ page: 1, items: [] }),
+    () =>
+      behavior.methods.items.execute(
+        { page: 1, pages: 1 },
+        bare.context,
+      ),
+  );
+  assertStringIncludes(
+    bare.getLogs().map(rendered).join("\n"),
+    "filters (none)",
+  );
+});
+
 Deno.test("items marks a full last page truncated and honours total_count", async () => {
   const full = testContext();
   await withMockedFetch(

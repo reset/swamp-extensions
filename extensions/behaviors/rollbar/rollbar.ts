@@ -902,6 +902,20 @@ function compact<T extends Record<string, unknown>>(value: T): T {
 }
 
 /**
+ * Renders item filters for a log line, `status=active, query="x"`, or
+ * `(none)`. A logger turns an object into `[object Object]`, so the line
+ * carries this string instead. Filters never hold the token.
+ */
+export function describeFilters(filters: ItemFilters): string {
+  const parts = Object.entries(filters)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) =>
+      key === "query" ? `${key}=${JSON.stringify(value)}` : `${key}=${value}`
+    );
+  return parts.length === 0 ? "(none)" : parts.join(", ");
+}
+
+/**
  * Names a level the API reported as a string or as Rollbar's number
  * (10 debug, 20 info, 30 warning, 40 error, 50 critical).
  */
@@ -1318,7 +1332,7 @@ export const behavior = {
   // String literals, not constants: the registry catalog reads them from the
   // source. The collective is provisional, rename it here.
   type: "@reset/rollbar",
-  version: "2026.10.21.1",
+  version: "2026.10.21.2",
   globalArguments: GlobalArgsSchema,
   resources: {
     items: {
@@ -1417,7 +1431,7 @@ export const behavior = {
             host: globalArgs.host,
             first: args.page,
             last: args.page + args.pages - 1,
-            filters,
+            filters: describeFilters(filters),
           },
         );
         const items: Item[] = [];
@@ -1998,6 +2012,15 @@ export const behavior = {
       toVersion: "2026.10.21.1",
       description: "Add the occurrence-counts, activated-counts, top-active, " +
         "events and fingerprint-test methods; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+    {
+      toVersion: "2026.10.21.2",
+      description: "Log the items filters as text instead of " +
+        "[object Object]; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>): Record<
         string,
         unknown
