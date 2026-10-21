@@ -1,0 +1,12 @@
+type: '@reset/forgejo-pulls'
+typeVersion: 2026.10.21.1
+id: 27a1b0f8-f97d-4ebd-93af-09a1ff6ad902
+name: forge
+version: 1
+tags: {}
+globalArguments:
+  host: 'https://git.reset.dev'
+  token: '${{ vault.get(default, forge-token) }}'
+  accessClientId: '${{ vault.get(default, forge-access-client-id) }}'
+  accessClientSecret: '${{ vault.get(default, forge-access-client-secret) }}'
+methods: {}
