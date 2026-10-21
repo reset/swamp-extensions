@@ -1,0 +1,25 @@
+manifestVersion: 1
+name: "@reset/forgejo-pulls"
+version: "2026.10.21.1"
+license: MIT
+description: |-
+  Drive pull requests on a Forgejo or Gitea forge: list and read them,
+  read a commit's statuses by context, list and post comments, and ask
+  the repository's merge bot to merge by posting the marker line it
+  listens for, each written as a resource a workflow can gate on.
+repository: https://github.com/reset/swamp-extensions
+paths:
+  base: manifest
+behaviors:
+  - forgejo_pulls.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+labels:
+  - forgejo
+  - gitea
+  - git
+  - pull-requests
+  - merge
+# Empty: the behavior is plain fetch and runs wherever swamp does.
+platforms: []

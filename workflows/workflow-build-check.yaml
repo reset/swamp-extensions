@@ -1,0 +1,66 @@
+id: 54faa7b0-a9c4-45b0-aebc-3d74cc5f73c1
+name: build-check
+description: |-
+  Read the newest build of a branch and fail unless it passed, saying
+  which build, what state it is in and which job stopped it.
+version: 1
+tags: {}
+inputs:
+  properties:
+    branch:
+      type: string
+      default: main
+      description: The branch whose newest build is checked.
+  required: []
+jobs:
+  - name: check
+    description: List the branch's newest build and assert it passed
+    steps:
+      - name: newest
+        description: The newest build of the branch, with its summary
+        task:
+          type: model_method
+          modelIdOrName: buildq
+          methodName: builds
+          inputs:
+            branch: ${{ inputs.branch }}
+            limit: 1
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: has-build
+        description: The branch has been built at all
+        task:
+          type: assert
+          expr: |-
+            int(data.latest("buildq", "builds").attributes.count) > 0
+          message: |-
+            no build of ${{ inputs.branch }} on
+            ${{ data.latest("buildq", "builds").attributes.host }}
+          severity: high
+        dependsOn:
+          - step: newest
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: passed
+        description: The newest build's state is passed
+        task:
+          type: assert
+          expr: |-
+            data.latest("buildq", "newest").attributes.passed == true
+          message: |-
+            build #${{ data.latest("buildq", "newest").attributes.number }}
+            of ${{ inputs.branch }} is
+            ${{ data.latest("buildq", "newest").attributes.state }}:
+            ${{ data.latest("buildq", "newest").attributes.reason }}
+          severity: high
+        dependsOn:
+          - step: has-build
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+    dependsOn: []
+    weight: 0

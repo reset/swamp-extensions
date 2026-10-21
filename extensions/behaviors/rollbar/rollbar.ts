@@ -2,10 +2,14 @@
  * A Swamp behavior for a Rollbar-compatible crash-reporting API: api.rollbar.com
  * itself, or a service that answers the same item, occurrence and deploy
  * endpoints, such as crashq, with one host change. It lists and reads items and
- * their occurrences, resolves, mutes and assigns items, and records and lists
- * deploys. Every method writes what it read as a resource, so a workflow can
- * assert on it with CEL. Occurrence resources keep ids, timestamps, versions and
- * the exception class and message only, never the reported payload.
+ * their occurrences, resolves, mutes and assigns items, records and lists
+ * deploys, reads the three reports (occurrence counts, activated counts and the
+ * top active items) and an item's events, and tests a project's fingerprint
+ * rules against one occurrence. Every method writes what it read as a resource,
+ * so a workflow can assert on it with CEL. Occurrence resources keep ids,
+ * timestamps, versions and the exception class and message only, never the
+ * reported payload; report resources keep counts, bucket timestamps, item ids,
+ * counters, levels and titles.
  *
  * @module
  */
@@ -22,8 +26,16 @@ const ITEMS_PAGE_SIZE = 100;
 const DEPLOYS_PAGE_SIZE = 20;
 /** Rollbar lists 20 occurrences per page unless a limit is given. */
 const OCCURRENCES_PAGE_SIZE = 20;
-/** Longest exception message an occurrence resource keeps. */
+/** Longest exception message, event value or title a resource keeps. */
 const MESSAGE_LIMIT = 300;
+/** activated_counts answers 2 to 366 daily buckets, 60 by default. */
+const ACTIVATED_BUCKETS_MIN = 2;
+const ACTIVATED_BUCKETS_MAX = 366;
+const ACTIVATED_BUCKETS_DEFAULT = 60;
+/** top_active_items looks back 1 to 168 hours, 24 by default. */
+const TOP_HOURS_MIN = 1;
+const TOP_HOURS_MAX = 168;
+const TOP_HOURS_DEFAULT = 24;
 
 const LEVELS = ["debug", "info", "warning", "error", "critical"] as const;
 const STATUSES = ["active", "resolved", "muted", "archived"] as const;
@@ -60,7 +72,7 @@ export interface GlobalArgs {
   host: string;
   /** Project access token, sent as X-Rollbar-Access-Token. Sensitive. */
   token: string;
-  /** Default environment filter for items and deploys. A method argument overrides it. */
+  /** Default environment filter for items, deploys and reports. A method argument overrides it. */
   environment?: string;
 }
 
@@ -286,6 +298,102 @@ export interface DeploysArgs {
   page: number;
 }
 
+/** One bucket of a report: its start and what it counted. */
+export interface CountBucket {
+  /** Unix seconds the bucket starts at, aligned to the bucket size in UTC. */
+  timestamp: number;
+  /** Occurrences, or activated items, in the bucket. */
+  count: number;
+}
+
+/** Arguments of the `occurrence-counts` method. */
+export interface OccurrenceCountsArgs {
+  /** Bucket size in seconds: 60, 3600 or 86400. */
+  bucketSize: number;
+  /** Only occurrences from these environments. Falls back to the global environment. */
+  environments?: string[];
+  /** Lowest level counted. The API defaults to error. */
+  minLevel?: string;
+  /** Highest level counted. */
+  maxLevel?: string;
+  /** Only one item's occurrences. */
+  itemId?: number;
+}
+
+/** Arguments of the `activated-counts` method. */
+export interface ActivatedCountsArgs {
+  /** How many daily buckets, 2 to 366. */
+  buckets: number;
+  /** Only items from these environments. Falls back to the global environment. */
+  environments?: string[];
+}
+
+/** Arguments of the `top-active` method. */
+export interface TopActiveArgs {
+  /** How many recent hours to count, 1 to 168. */
+  hours: number;
+  /** Only items from these environments. Falls back to the global environment. */
+  environments?: string[];
+  /** Order by occurrences alone, instead of by level and then occurrences. */
+  byOccurrences: boolean;
+}
+
+/** One row of the `top-active` resource: an item and its hourly counts. */
+export interface TopActiveItem {
+  /** The item's id. */
+  id: number;
+  /** The item's counter. */
+  counter: number;
+  /** The item's title, cut to 300 characters. */
+  title: string;
+  /** Level name. */
+  level: string;
+  /** Environment the item's occurrences were reported from. */
+  environment: string;
+  /** Occurrences in the window: the API's count, or the sum of `counts`. */
+  occurrences: number;
+  /** Occurrences counted over the item's life, when the API reports it (crashq does). */
+  totalOccurrences?: number;
+  /** Distinct install ids seen, when the API reports it. */
+  uniqueOccurrences?: number;
+  /** Unix seconds of the last occurrence, when the API reports it. */
+  lastOccurrenceTimestamp?: number;
+  /** Status, when the API reports it (crashq does; the items are active). */
+  status?: string;
+  /** Occurrences per hour of the window, oldest first. */
+  counts: number[];
+}
+
+/** One event of an item's history, as the `events` resource keeps it. */
+export interface ItemEvent {
+  /** The event's id. */
+  id: number;
+  /** Unix seconds the event happened, when reported. */
+  timestamp?: number;
+  /** What changed: status, level, assigned_user_id, title, resolved_in_version or comment. */
+  type: string;
+  /** The value before, cut to 300 characters, when there was one. */
+  oldValue?: string;
+  /** The value after, or the comment, cut to 300 characters, when there is one. */
+  newValue?: string;
+  /** Id of the user who made the change, when a person did. */
+  userId?: number;
+  /** Id of the occurrence that caused the change, when one did. */
+  occurrenceId?: number;
+}
+
+/** Arguments of the `fingerprint-test` method. */
+export interface FingerprintTestArgs {
+  /** The token's project id. */
+  projectId: number;
+  /** Id of the occurrence to group. */
+  instance: number;
+  /** Rules to try instead of the stored ones, in the API's rule format. */
+  rules?: Record<string, unknown>[];
+  /** Whether to skip a fingerprint the client sent, when trying rules. */
+  ignoreClientFingerprint?: boolean;
+}
+
 /** One request to the API. */
 export interface RequestOptions {
   /** HTTP method. */
@@ -341,7 +449,7 @@ const GlobalArgsSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Default environment filter for items and deploys. A method argument overrides it.",
+      "Default environment filter for items, deploys and reports. A method argument overrides it.",
     ),
 }) satisfies z.ZodType<GlobalArgs>;
 
@@ -476,6 +584,85 @@ const DeploysArgsSchema = z.object({
     .describe("Page to fetch, 1-based, newest first."),
 }) satisfies z.ZodType<DeploysArgs>;
 
+const EnvironmentsShape = {
+  environments: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Only these environments. Falls back to the global environment; empty means any.",
+    ),
+};
+
+const OccurrenceCountsArgsSchema = z.object({
+  bucketSize: z
+    .union([z.literal(60), z.literal(3600), z.literal(86400)])
+    .default(86400)
+    .describe("Bucket size in seconds: 60, 3600 or 86400 (a day)."),
+  ...EnvironmentsShape,
+  minLevel: z
+    .enum(LEVELS)
+    .optional()
+    .describe("Lowest level counted. The API defaults to error."),
+  maxLevel: z.enum(LEVELS).optional().describe("Highest level counted."),
+  itemId: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Only this item's occurrences."),
+}) satisfies z.ZodType<OccurrenceCountsArgs>;
+
+const ActivatedCountsArgsSchema = z.object({
+  buckets: z
+    .number()
+    .int()
+    .min(ACTIVATED_BUCKETS_MIN)
+    .max(ACTIVATED_BUCKETS_MAX)
+    .default(ACTIVATED_BUCKETS_DEFAULT)
+    .describe("How many daily buckets, 2 to 366."),
+  ...EnvironmentsShape,
+}) satisfies z.ZodType<ActivatedCountsArgs>;
+
+const TopActiveArgsSchema = z.object({
+  hours: z
+    .number()
+    .int()
+    .min(TOP_HOURS_MIN)
+    .max(TOP_HOURS_MAX)
+    .default(TOP_HOURS_DEFAULT)
+    .describe("How many recent hours to count, 1 to 168."),
+  ...EnvironmentsShape,
+  byOccurrences: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Order by occurrences alone, instead of by level and then occurrences.",
+    ),
+}) satisfies z.ZodType<TopActiveArgs>;
+
+const FingerprintTestArgsSchema = z.object({
+  projectId: z
+    .number()
+    .int()
+    .positive()
+    .describe("The token's project id."),
+  instance: z
+    .number()
+    .int()
+    .positive()
+    .describe("Id of the occurrence to group."),
+  rules: z
+    .array(z.record(z.string(), z.unknown()))
+    .optional()
+    .describe(
+      "Rules to try instead of the stored ones: condition, fingerprint, title.",
+    ),
+  ignoreClientFingerprint: z
+    .boolean()
+    .optional()
+    .describe("Skip a fingerprint the client sent, when trying rules."),
+}) satisfies z.ZodType<FingerprintTestArgs>;
+
 const ItemSchema = z.object({
   id: z.number().int(),
   counter: z.number().int(),
@@ -596,6 +783,93 @@ const DeploysResourceSchema = z.object({
   deploys: z.array(DeploySchema),
 });
 
+const CountBucketSchema = z.object({
+  timestamp: z.number().int(),
+  count: z.number().int(),
+}) satisfies z.ZodType<CountBucket>;
+
+/** What both count reports share: the buckets, their sum and the newest one. */
+const CountsShape = {
+  fetchedAt: z.iso.datetime(),
+  host: z.string(),
+  environments: z.array(z.string()),
+  count: z.number().int(),
+  total: z.number().int(),
+  newestTimestamp: z.number().int().optional(),
+  newestCount: z.number().int().optional(),
+  buckets: z.array(CountBucketSchema),
+};
+
+const OccurrenceCountsResourceSchema = z.object({
+  ...CountsShape,
+  bucketSize: z.number().int(),
+  minLevel: z.string(),
+  maxLevel: z.string().optional(),
+  itemId: z.number().int().optional(),
+});
+
+const ActivatedCountsResourceSchema = z.object({
+  ...CountsShape,
+  bucketsRequested: z.number().int(),
+});
+
+const TopActiveItemSchema = z.object({
+  id: z.number().int(),
+  counter: z.number().int(),
+  title: z.string(),
+  level: z.string(),
+  environment: z.string(),
+  occurrences: z.number().int(),
+  totalOccurrences: z.number().int().optional(),
+  uniqueOccurrences: z.number().int().optional(),
+  lastOccurrenceTimestamp: z.number().int().optional(),
+  status: z.string().optional(),
+  counts: z.array(z.number().int()),
+}) satisfies z.ZodType<TopActiveItem>;
+
+const TopActiveResourceSchema = z.object({
+  fetchedAt: z.iso.datetime(),
+  host: z.string(),
+  hours: z.number().int(),
+  environments: z.array(z.string()),
+  sort: z.string(),
+  count: z.number().int(),
+  items: z.array(TopActiveItemSchema),
+});
+
+const ItemEventSchema = z.object({
+  id: z.number().int(),
+  timestamp: z.number().int().optional(),
+  type: z.string(),
+  oldValue: z.string().optional(),
+  newValue: z.string().optional(),
+  userId: z.number().int().optional(),
+  occurrenceId: z.number().int().optional(),
+}) satisfies z.ZodType<ItemEvent>;
+
+const EventsResourceSchema = z.object({
+  fetchedAt: z.iso.datetime(),
+  host: z.string(),
+  itemId: z.number().int(),
+  counter: z.number().int(),
+  count: z.number().int(),
+  events: z.array(ItemEventSchema),
+});
+
+const FingerprintTestResourceSchema = z.object({
+  testedAt: z.iso.datetime(),
+  host: z.string(),
+  projectId: z.number().int(),
+  instance: z.number().int(),
+  rulesSent: z.boolean(),
+  rule: z.number().int().optional(),
+  fingerprint: z.string(),
+  hash: z.string(),
+  title: z.string(),
+  itemId: z.number().int().optional(),
+  counter: z.number().int().optional(),
+});
+
 // ---------------------------------------------------------------------------
 // Answer parsing
 // ---------------------------------------------------------------------------
@@ -625,6 +899,20 @@ function compact<T extends Record<string, unknown>>(value: T): T {
     if (entry !== undefined) out[key] = entry;
   }
   return out as T;
+}
+
+/**
+ * Renders item filters for a log line, `status=active, query="x"`, or
+ * `(none)`. A logger turns an object into `[object Object]`, so the line
+ * carries this string instead. Filters never hold the token.
+ */
+export function describeFilters(filters: ItemFilters): string {
+  const parts = Object.entries(filters)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) =>
+      key === "query" ? `${key}=${JSON.stringify(value)}` : `${key}=${value}`
+    );
+  return parts.length === 0 ? "(none)" : parts.join(", ");
 }
 
 /**
@@ -726,6 +1014,122 @@ export function normalizeDeploy(raw: unknown): Deploy {
     startTime: asInteger(raw.start_time),
     finishTime: asInteger(raw.finish_time),
   });
+}
+
+/**
+ * Reduces one report row to a bucket. Rollbar answers `[timestamp, count]`
+ * pairs; an object with `timestamp` and `count` is read the same way.
+ */
+export function normalizeBucket(raw: unknown): CountBucket {
+  const timestamp = Array.isArray(raw)
+    ? asInteger(raw[0])
+    : isRecord(raw)
+    ? asInteger(raw.timestamp)
+    : undefined;
+  const count = Array.isArray(raw)
+    ? asInteger(raw[1])
+    : isRecord(raw)
+    ? asInteger(raw.count)
+    : undefined;
+  if (timestamp === undefined || count === undefined) {
+    throw new Error("report row is not a [timestamp, count] pair");
+  }
+  return { timestamp, count };
+}
+
+/** The sum and the newest bucket of a report, for the resource's flat fields. */
+function bucketTotals(buckets: readonly CountBucket[]): {
+  total: number;
+  newestTimestamp?: number;
+  newestCount?: number;
+} {
+  const newest = buckets.reduce<CountBucket | undefined>(
+    (best, bucket) =>
+      best === undefined || bucket.timestamp > best.timestamp ? bucket : best,
+    undefined,
+  );
+  return compact({
+    total: buckets.reduce((sum, bucket) => sum + bucket.count, 0),
+    newestTimestamp: newest?.timestamp,
+    newestCount: newest?.count,
+  });
+}
+
+/**
+ * Reduces one top_active_items row, `{item, counts}`, to the fields the
+ * `top-active` resource keeps. Rollbar's item carries `occurrences` for the
+ * window and a numeric level; crashq's is the item as the item calls answer
+ * it, so the window's occurrences are the sum of `counts`.
+ */
+export function normalizeTopActive(raw: unknown): TopActiveItem {
+  if (!isRecord(raw) || !isRecord(raw.item)) {
+    throw new Error("top active row carries no item");
+  }
+  const item = raw.item;
+  const id = asInteger(item.id);
+  const counter = asInteger(item.counter);
+  if (id === undefined || counter === undefined) {
+    throw new Error("top active item carries no id and counter");
+  }
+  const counts = (Array.isArray(raw.counts) ? raw.counts : [])
+    .map(asInteger)
+    .filter((count): count is number => count !== undefined);
+  return compact({
+    id,
+    counter,
+    title: (asString(item.title) ?? "").slice(0, MESSAGE_LIMIT),
+    level: levelName(item.level),
+    environment: asString(item.environment) ?? "",
+    occurrences: asInteger(item.occurrences) ??
+      counts.reduce((sum, count) => sum + count, 0),
+    totalOccurrences: asInteger(item.total_occurrences),
+    uniqueOccurrences: asInteger(item.unique_occurrences),
+    lastOccurrenceTimestamp: asInteger(item.last_occurrence_timestamp),
+    status: asString(item.status),
+    counts,
+  });
+}
+
+/** A value an event carries, as text cut to the message limit. */
+function eventValue(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return text.slice(0, MESSAGE_LIMIT);
+}
+
+/** Reduces one item event to the fields the `events` resource keeps. */
+export function normalizeEvent(raw: unknown): ItemEvent {
+  if (!isRecord(raw)) throw new Error("event answer is not an object");
+  const id = asInteger(raw.id);
+  if (id === undefined) throw new Error("event answer carries no id");
+  return compact({
+    id,
+    timestamp: asInteger(raw.timestamp),
+    type: asString(raw.type) ?? "unknown",
+    oldValue: eventValue(raw.old_value),
+    newValue: eventValue(raw.new_value),
+    userId: asInteger(raw.user_id) ?? undefined,
+    occurrenceId: asInteger(raw.occurrence_id) ?? undefined,
+  });
+}
+
+/**
+ * The environments a report is filtered to: the argument, else the global
+ * environment, else none (any environment).
+ */
+function environmentsOf(
+  args: { environments?: string[] },
+  globalArgs: GlobalArgs,
+): string[] {
+  if (args.environments !== undefined) return args.environments;
+  return globalArgs.environment === undefined ? [] : [globalArgs.environment];
+}
+
+/** The `environments` query value: comma-separated, or left out when empty. */
+function environmentsQuery(
+  environments: readonly string[],
+): string | undefined {
+  return environments.length === 0 ? undefined : environments.join(",");
 }
 
 /** Counts items by level and status, and the active error or critical ones. */
@@ -928,7 +1332,7 @@ export const behavior = {
   // String literals, not constants: the registry catalog reads them from the
   // source. The collective is provisional, rename it here.
   type: "@reset/rollbar",
-  version: "2026.10.20.1",
+  version: "2026.10.21.2",
   globalArguments: GlobalArgsSchema,
   resources: {
     items: {
@@ -969,6 +1373,41 @@ export const behavior = {
       lifetime: "infinite",
       garbageCollection: 10,
     },
+    "occurrence-counts": {
+      description: "Occurrences per bucket, with the sum and the newest " +
+        "bucket flat for CEL asserts",
+      schema: OccurrenceCountsResourceSchema,
+      lifetime: "infinite",
+      garbageCollection: 60,
+    },
+    "activated-counts": {
+      description: "Items first seen or reactivated per day, with the sum " +
+        "and the newest day flat for CEL asserts",
+      schema: ActivatedCountsResourceSchema,
+      lifetime: "infinite",
+      garbageCollection: 60,
+    },
+    "top-active": {
+      description: "The busiest active items of a window with their hourly " +
+        "counts: ids, counters, levels and titles, never occurrences",
+      schema: TopActiveResourceSchema,
+      lifetime: "infinite",
+      garbageCollection: 60,
+    },
+    events: {
+      description: "One item's history: status, level, assignee, title and " +
+        "version changes and comments",
+      schema: EventsResourceSchema,
+      lifetime: "infinite",
+      garbageCollection: 10,
+    },
+    "fingerprint-test": {
+      description: "What one occurrence groups by: the rule, fingerprint, " +
+        "hash and title, never the occurrence",
+      schema: FingerprintTestResourceSchema,
+      lifetime: "30d",
+      garbageCollection: 5,
+    },
   },
   methods: {
     items: {
@@ -992,7 +1431,7 @@ export const behavior = {
             host: globalArgs.host,
             first: args.page,
             last: args.page + args.pages - 1,
-            filters,
+            filters: describeFilters(filters),
           },
         );
         const items: Item[] = [];
@@ -1280,5 +1719,312 @@ export const behavior = {
         return { dataHandles: [handle] };
       },
     },
+    "occurrence-counts": {
+      description: "Occurrences per bucket of a minute, an hour or a day " +
+        "(60 buckets), at or above a level, for environments or one item. " +
+        "Writes occurrence-counts.",
+      arguments: OccurrenceCountsArgsSchema,
+      execute: async (
+        args: OccurrenceCountsArgs,
+        context: Context,
+      ): Promise<MethodResult> => {
+        const { globalArgs, signal, logger } = context;
+        const environments = environmentsOf(args, globalArgs);
+        const minLevel = args.minLevel ?? "error";
+        logger.info(
+          "Reading occurrence counts from {host}: buckets of {bucketSize}s, levels {minLevel} to {maxLevel}, environments {environments}",
+          {
+            host: globalArgs.host,
+            bucketSize: args.bucketSize,
+            minLevel,
+            maxLevel: args.maxLevel ?? "critical",
+            environments: environments.length === 0 ? "(any)" : environments,
+          },
+        );
+        const result = await request(
+          globalArgs,
+          {
+            method: "GET",
+            path: "/api/1/reports/occurrence_counts",
+            query: {
+              bucket_size: args.bucketSize,
+              environments: environmentsQuery(environments),
+              min_level: minLevel,
+              max_level: args.maxLevel,
+              item_id: args.itemId,
+            },
+          },
+          signal,
+        );
+        const buckets = rowsOf(result, "result").map(normalizeBucket);
+        const totals = bucketTotals(buckets);
+        const handle = await context.writeResource(
+          "occurrence-counts",
+          "occurrence-counts",
+          {
+            fetchedAt: new Date().toISOString(),
+            host: globalArgs.host,
+            environments,
+            bucketSize: args.bucketSize,
+            minLevel,
+            ...compact({ maxLevel: args.maxLevel, itemId: args.itemId }),
+            count: buckets.length,
+            ...totals,
+            buckets,
+          },
+        );
+        logger.info(
+          "Read {count} buckets: {total} occurrences, {newest} in the newest",
+          {
+            count: buckets.length,
+            total: totals.total,
+            newest: totals.newestCount ?? 0,
+          },
+        );
+        return { dataHandles: [handle] };
+      },
+    },
+    "activated-counts": {
+      description: "Items first seen or reactivated per day, 2 to 366 days " +
+        "(60 by default), for environments. Writes activated-counts.",
+      arguments: ActivatedCountsArgsSchema,
+      execute: async (
+        args: ActivatedCountsArgs,
+        context: Context,
+      ): Promise<MethodResult> => {
+        const { globalArgs, signal, logger } = context;
+        const environments = environmentsOf(args, globalArgs);
+        logger.info(
+          "Reading activated counts from {host}: {buckets} days, environments {environments}",
+          {
+            host: globalArgs.host,
+            buckets: args.buckets,
+            environments: environments.length === 0 ? "(any)" : environments,
+          },
+        );
+        const result = await request(
+          globalArgs,
+          {
+            method: "GET",
+            path: "/api/1/reports/activated_counts",
+            query: {
+              buckets: args.buckets,
+              environments: environmentsQuery(environments),
+            },
+          },
+          signal,
+        );
+        const buckets = rowsOf(result, "result").map(normalizeBucket);
+        const totals = bucketTotals(buckets);
+        const handle = await context.writeResource(
+          "activated-counts",
+          "activated-counts",
+          {
+            fetchedAt: new Date().toISOString(),
+            host: globalArgs.host,
+            environments,
+            bucketsRequested: args.buckets,
+            count: buckets.length,
+            ...totals,
+            buckets,
+          },
+        );
+        logger.info(
+          "Read {count} buckets: {total} items activated, {newest} in the newest",
+          {
+            count: buckets.length,
+            total: totals.total,
+            newest: totals.newestCount ?? 0,
+          },
+        );
+        return { dataHandles: [handle] };
+      },
+    },
+    "top-active": {
+      description: "The ten active items with the most occurrences over " +
+        "1 to 168 recent hours (24 by default), each with its hourly " +
+        "counts. Writes top-active.",
+      arguments: TopActiveArgsSchema,
+      execute: async (
+        args: TopActiveArgs,
+        context: Context,
+      ): Promise<MethodResult> => {
+        const { globalArgs, signal, logger } = context;
+        const environments = environmentsOf(args, globalArgs);
+        const sort = args.byOccurrences ? "occurrences" : "level";
+        logger.info(
+          "Reading top active items from {host}: {hours} hours, by {sort}, environments {environments}",
+          {
+            host: globalArgs.host,
+            hours: args.hours,
+            sort,
+            environments: environments.length === 0 ? "(any)" : environments,
+          },
+        );
+        const result = await request(
+          globalArgs,
+          {
+            method: "GET",
+            path: "/api/1/reports/top_active_items",
+            query: {
+              hours: args.hours,
+              environments: environmentsQuery(environments),
+              sort: args.byOccurrences ? "occurrences" : undefined,
+            },
+          },
+          signal,
+        );
+        const items = rowsOf(result, "result").map(normalizeTopActive);
+        const handle = await context.writeResource("top-active", "top-active", {
+          fetchedAt: new Date().toISOString(),
+          host: globalArgs.host,
+          hours: args.hours,
+          environments,
+          sort,
+          count: items.length,
+          items,
+        });
+        logger.info("Read {count} top active items, busiest #{counter}", {
+          count: items.length,
+          counter: items[0]?.counter ?? "(none)",
+        });
+        return { dataHandles: [handle] };
+      },
+    },
+    events: {
+      description: "Read one item's history by id or counter: status, " +
+        "level, assignee, title and version changes and comments, oldest " +
+        "first. Writes events-<counter>.",
+      arguments: ItemRefSchema,
+      execute: async (
+        args: ItemRef,
+        context: Context,
+      ): Promise<MethodResult> => {
+        const { globalArgs, signal, logger } = context;
+        const item = await fetchItem(globalArgs, args, signal);
+        logger.info("Reading events of item #{counter} from {host}", {
+          counter: item.counter,
+          host: globalArgs.host,
+        });
+        const result = await request(
+          globalArgs,
+          { method: "GET", path: `/api/1/item/${item.id}/events` },
+          signal,
+        );
+        const events = rowsOf(result, "events").map(normalizeEvent);
+        const handle = await context.writeResource(
+          "events",
+          `events-${item.counter}`,
+          {
+            fetchedAt: new Date().toISOString(),
+            host: globalArgs.host,
+            itemId: item.id,
+            counter: item.counter,
+            count: events.length,
+            events,
+          },
+        );
+        logger.info("Read {count} events of item #{counter}", {
+          count: events.length,
+          counter: item.counter,
+        });
+        return { dataHandles: [handle] };
+      },
+    },
+    "fingerprint-test": {
+      description: "Group one occurrence by the project's fingerprint rules, " +
+        "or by rules given to try, and keep the rule, fingerprint, hash and " +
+        "title it gets. crashq only. Writes fingerprint-test-<instance>.",
+      arguments: FingerprintTestArgsSchema,
+      execute: async (
+        args: FingerprintTestArgs,
+        context: Context,
+      ): Promise<MethodResult> => {
+        const { globalArgs, signal, logger } = context;
+        const rulesSent = args.rules !== undefined ||
+          args.ignoreClientFingerprint !== undefined;
+        logger.info(
+          "Testing fingerprint rules of project {projectId} on {host} against occurrence {instance} ({rules})",
+          {
+            projectId: args.projectId,
+            host: globalArgs.host,
+            instance: args.instance,
+            rules: rulesSent ? "rules given" : "stored rules",
+          },
+        );
+        const result = await request(
+          globalArgs,
+          {
+            method: "POST",
+            path: `/api/1/project/${args.projectId}/fingerprint_rules/test`,
+            body: {
+              instance: args.instance,
+              rules: args.rules,
+              ignore_client_fingerprint: args.ignoreClientFingerprint,
+            },
+          },
+          signal,
+        );
+        if (!isRecord(result)) {
+          throw new Error("fingerprint test answer is not an object");
+        }
+        const fingerprint = asString(result.fingerprint);
+        const hash = asString(result.hash);
+        if (fingerprint === undefined || hash === undefined) {
+          throw new Error("fingerprint test answer carries no fingerprint");
+        }
+        const item = isRecord(result.item) ? result.item : {};
+        const handle = await context.writeResource(
+          "fingerprint-test",
+          `fingerprint-test-${args.instance}`,
+          {
+            testedAt: new Date().toISOString(),
+            host: globalArgs.host,
+            projectId: args.projectId,
+            instance: args.instance,
+            rulesSent,
+            ...compact({
+              rule: asInteger(result.rule) ?? undefined,
+              itemId: asInteger(item.id),
+              counter: asInteger(item.counter),
+            }),
+            fingerprint,
+            hash,
+            title: (asString(result.title) ?? "").slice(0, MESSAGE_LIMIT),
+          },
+        );
+        logger.info(
+          "Occurrence {instance} groups by {grouping} as {fingerprint}",
+          {
+            instance: args.instance,
+            grouping: asInteger(result.rule) === undefined
+              ? "the default grouping"
+              : `rule ${asInteger(result.rule)}`,
+            fingerprint: fingerprint.slice(0, 80),
+          },
+        );
+        return { dataHandles: [handle] };
+      },
+    },
   },
+  upgrades: [
+    {
+      toVersion: "2026.10.21.1",
+      description: "Add the occurrence-counts, activated-counts, top-active, " +
+        "events and fingerprint-test methods; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+    {
+      toVersion: "2026.10.21.2",
+      description: "Log the items filters as text instead of " +
+        "[object Object]; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+  ],
 };
