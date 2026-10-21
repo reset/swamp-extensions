@@ -1,0 +1,6 @@
+version: 1
+accept:
+  - rule: behavior-spelling
+    reason: |-
+      Written against swamp 20261020.024627.0, the release that added the
+      behavior spelling. Consumers on an older swamp are not supported.

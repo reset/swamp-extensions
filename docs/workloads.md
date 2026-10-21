@@ -9,6 +9,7 @@ is done by hand until the SMK verb exists, and the flight is the specification f
 | Workflow       | Behavior         | Relied on                                                 |
 | -------------- | ---------------- | --------------------------------------------------------- |
 | crash-backlog  | `@reset/rollbar` | the `crash` CLI and the crash-triage skill against crashq |
+| build-check    | `@reset/buildq`  | `smk ci`, and buildq's own commit status and build email  |
 | steam-promote  | `@reset/steam`   | the steam-publish skill's procedure                       |
 | unity-verify   | `@reset/unity`   | buildq running the repository's `make ci`                 |
 | godot-build    | `@reset/godot`   | buildq running the repository's `make ci` and export      |
