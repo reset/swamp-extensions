@@ -1,0 +1,102 @@
+id: 70ef23df-7d39-4f11-8bbe-8abb83c29c80
+name: release-readiness
+description: |-
+  Read a release, list the items that first shipped in it and fail when
+  any of them is still unstarted or started.
+version: 1
+tags: {}
+inputs:
+  properties:
+    project:
+      type: string
+      description: The project's slug in the instance's org.
+    version:
+      type: string
+      description: The release's version, as the project names it (1.8.2).
+    pages:
+      type: integer
+      default: 5
+      description: How many pages of 200 items to list.
+  required:
+    - project
+    - version
+jobs:
+  - name: readiness
+    description: |-
+      Read the release, list its items and check every one is finished
+    steps:
+      - name: read-release
+        description: |-
+          The release itself, so a wrong version fails here and not at
+          the list
+        task:
+          type: model_method
+          modelIdOrName: workq
+          methodName: release
+          inputs:
+            project: ${{ inputs.project }}
+            version: ${{ inputs.version }}
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: list-shipped
+        description: |-
+          The items that first shipped in the release, with counts by
+          status group
+        task:
+          type: model_method
+          modelIdOrName: workq
+          methodName: list_items
+          inputs:
+            project: ${{ inputs.project }}
+            release: ${{ inputs.version }}
+            limit: 200
+            pages: ${{ inputs.pages }}
+        dependsOn:
+          - step: read-release
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: every-item-listed
+        description: |-
+          The list was not cut short, so the counts below cover the
+          whole release
+        task:
+          type: assert
+          expr: |-
+            !data.latest("workq", "summary").attributes.truncated
+          message: |-
+            release ${{ inputs.version }} has more items than the
+            ${{ inputs.pages }} pages of 200 listed; raise pages
+          severity: high
+        dependsOn:
+          - step: list-shipped
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: all-finished
+        description: No item in the release is still unstarted or started
+        task:
+          type: assert
+          expr: |-
+            int(data.latest("workq", "summary").attributes.byGroup.unstarted)
+            + int(data.latest("workq", "summary").attributes.byGroup.started)
+            == 0
+          message: |-
+            release ${{ inputs.version }} of ${{ inputs.project }} is not ready:
+            ${{ data.latest("workq", "summary").attributes.byGroup.unstarted }}
+            of its ${{ data.latest("workq", "summary").attributes.count }} items
+            are unstarted and
+            ${{ data.latest("workq", "summary").attributes.byGroup.started }}
+            are started
+          severity: high
+        dependsOn:
+          - step: every-item-listed
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+    dependsOn: []
+    weight: 0
