@@ -29,7 +29,8 @@ inputs:
     - channel
 jobs:
   - name: push
-    description: Push the build, wait for processing, assert the channel is ready
+    description: |-
+      Push the build, wait for processing, assert the channel is ready
     steps:
       - name: push
         description: Upload the build with butler push
