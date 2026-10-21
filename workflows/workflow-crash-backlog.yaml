@@ -17,6 +17,12 @@ inputs:
       type: integer
       default: 1
       description: How many pages of 100 items to list.
+    instance:
+      type: string
+      default: crashq
+      description: |-
+        The @reset/rollbar instance under models/ naming the
+        project whose backlog to read.
   required: []
 jobs:
   - name: backlog
@@ -26,7 +32,7 @@ jobs:
         description: Active items, with a summary by level and status
         task:
           type: model_method
-          modelIdOrName: crashq
+          modelIdOrName: ${{ inputs.instance }}
           methodName: items
           inputs:
             status: active
@@ -39,11 +45,12 @@ jobs:
         task:
           type: assert
           expr: |-
-            int(data.latest("crashq", "summary").attributes.activeErrors)
-            < int(inputs.threshold)
+            int(data.latest(inputs.instance, "summary")
+            .attributes.activeErrors) < int(inputs.threshold)
           message: |-
-            ${{ data.latest("crashq", "summary").attributes.activeErrors }}
-            active error or critical items, threshold ${{ inputs.threshold }}
+            ${{ data.latest(inputs.instance, "summary")
+            .attributes.activeErrors }} active error or critical items,
+            threshold ${{ inputs.threshold }}
           severity: high
         dependsOn:
           - step: list-active

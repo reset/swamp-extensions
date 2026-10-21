@@ -16,6 +16,12 @@ inputs:
       type: string
       default: Promoted by the steam-promote workflow
       description: Note recorded with the change in Steamworks
+    instance:
+      type: string
+      default: steam-app
+      description: |-
+        The @reset/steam instance under models/ naming the
+        app whose build to promote.
   required:
     - buildId
 jobs:
@@ -26,7 +32,7 @@ jobs:
         description: Read the newest 100 builds Steam committed for the app
         task:
           type: behavior
-          behavior: steam-app
+          behavior: ${{ inputs.instance }}
           methodName: builds
           inputs:
             count: 100
@@ -40,7 +46,7 @@ jobs:
           type: assert
           expr: |-
             inputs.buildId in
-            data.latest("steam-app", "builds").attributes.buildIds
+            data.latest(inputs.instance, "builds").attributes.buildIds
           message: Build ${{ inputs.buildId }} is not among the newest builds
           severity: high
       - name: approve
@@ -61,7 +67,7 @@ jobs:
               type: succeeded
         task:
           type: behavior
-          behavior: steam-app
+          behavior: ${{ inputs.instance }}
           methodName: setLive
           inputs:
             buildId: ${{ inputs.buildId }}

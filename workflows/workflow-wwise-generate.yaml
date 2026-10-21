@@ -25,6 +25,12 @@ inputs:
       type: integer
       default: 0
       description: The run fails when the log carries more warnings than this.
+    instance:
+      type: string
+      default: wwise-local
+      description: |-
+        The @reset/wwise instance under models/ naming the
+        Authoring instance to generate in.
   required: []
 jobs:
   - name: generate
@@ -34,7 +40,7 @@ jobs:
         description: Wwise and project facts, so a missing project fails early
         task:
           type: behavior
-          behavior: wwise-local
+          behavior: ${{ inputs.instance }}
           methodName: info
       - name: project-open
         description: A project is open in Wwise
@@ -45,7 +51,7 @@ jobs:
         task:
           type: assert
           expr: |-
-            data.latest("wwise-local", "info").attributes.project != null
+            data.latest(inputs.instance, "info").attributes.project != null
           message: No project is open in Wwise
           severity: high
       - name: generate
@@ -56,7 +62,7 @@ jobs:
               type: succeeded
         task:
           type: behavior
-          behavior: wwise-local
+          behavior: ${{ inputs.instance }}
           methodName: generate
           inputs:
             banks: ${{ inputs.banks }}
@@ -72,13 +78,13 @@ jobs:
         task:
           type: assert
           expr: |-
-            data.latest("wwise-local", "generation").attributes.succeeded &&
-            int(data.latest("wwise-local", "generation").attributes.counts.warnings)
+            data.latest(inputs.instance, "generation").attributes.succeeded &&
+            int(data.latest(inputs.instance, "generation").attributes.counts.warnings)
             <= int(inputs.warningsAllowed)
           message: |-
             SoundBank generation reported
-            ${{ data.latest("wwise-local", "generation").attributes.counts.errors }}
+            ${{ data.latest(inputs.instance, "generation").attributes.counts.errors }}
             errors and
-            ${{ data.latest("wwise-local", "generation").attributes.counts.warnings }}
+            ${{ data.latest(inputs.instance, "generation").attributes.counts.warnings }}
             warnings, ${{ inputs.warningsAllowed }} allowed
           severity: high

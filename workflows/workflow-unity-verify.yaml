@@ -17,6 +17,12 @@ inputs:
       description: |-
         The run fails when the compiler warning count reaches this number.
         The default allows any.
+    instance:
+      type: string
+      default: unity-project
+      description: |-
+        The @reset/unity instance under models/ naming the
+        project to compile and test.
   required: []
 jobs:
   - name: verify
@@ -27,7 +33,7 @@ jobs:
           Open the project in batch mode and read the compiler diagnostics
         task:
           type: behavior
-          behavior: unity-project
+          behavior: ${{ inputs.instance }}
           methodName: compile
       - name: compiles
         description: No compiler errors, and fewer warnings than the limit
@@ -39,14 +45,14 @@ jobs:
         task:
           type: assert
           expr: |-
-            int(data.latest("unity-project", "compile").attributes.errorCount)
+            int(data.latest(inputs.instance, "compile").attributes.errorCount)
             == 0 &&
-            int(data.latest("unity-project", "compile").attributes.warningCount)
+            int(data.latest(inputs.instance, "compile").attributes.warningCount)
             < int(inputs.maxWarnings)
           message: |-
-            ${{ data.latest("unity-project", "compile").attributes.errorCount }}
+            ${{ data.latest(inputs.instance, "compile").attributes.errorCount }}
             compiler errors and
-            ${{ data.latest("unity-project", "compile").attributes.warningCount }}
+            ${{ data.latest(inputs.instance, "compile").attributes.warningCount }}
             warnings (limit ${{ inputs.maxWarnings }})
           severity: high
       - name: test
@@ -57,7 +63,7 @@ jobs:
               type: succeeded
         task:
           type: behavior
-          behavior: unity-project
+          behavior: ${{ inputs.instance }}
           methodName: test
           inputs:
             platform: ${{ inputs.platform }}
@@ -70,9 +76,9 @@ jobs:
         task:
           type: assert
           expr: |-
-            int(data.latest("unity-project", "test").attributes.failed) == 0
+            int(data.latest(inputs.instance, "test").attributes.failed) == 0
           message: |-
-            ${{ data.latest("unity-project", "test").attributes.failed }} of
-            ${{ data.latest("unity-project", "test").attributes.total }}
+            ${{ data.latest(inputs.instance, "test").attributes.failed }} of
+            ${{ data.latest(inputs.instance, "test").attributes.total }}
             tests failed
           severity: high
