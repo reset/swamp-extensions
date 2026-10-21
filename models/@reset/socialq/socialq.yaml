@@ -1,0 +1,11 @@
+type: '@reset/socialq'
+typeVersion: 2026.10.21.1
+id: 440dfc62-5af0-4d34-b8d3-af6549637cc5
+name: socialq
+version: 1
+tags: {}
+globalArguments:
+  host: 'https://socialq.karate.company'
+  clientId: '${{ vault.get(default, socialq-client-id) }}'
+  clientSecret: '${{ vault.get(default, socialq-client-secret) }}'
+methods: {}
