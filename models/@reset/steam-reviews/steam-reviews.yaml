@@ -1,0 +1,9 @@
+type: '@reset/steam-reviews'
+typeVersion: 2026.10.21.1
+id: 68902a14-28e6-4b75-ad96-fb7e70ec9721
+name: steam-reviews
+version: 1
+tags: {}
+globalArguments:
+  appId: 480
+methods: {}

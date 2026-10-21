@@ -1,0 +1,75 @@
+id: 8dd44700-45cf-4bca-bade-929859cf0da9
+name: steam-news-posted
+description: |-
+  Check that a release's announcement is live on the store: an
+  announcement naming the version was posted since a time.
+version: 1
+tags: {}
+inputs:
+  properties:
+    version:
+      type: string
+      description: Text the announcement's title carries, such as 1.4.2
+    since:
+      type: string
+      description: |-
+        ISO-8601 time the release was promoted; only posts at or after it
+        count
+    searchContents:
+      type: boolean
+      default: false
+      description: Also look for the version in each post's body
+  required:
+    - version
+    - since
+jobs:
+  - name: announced
+    description: Search the announcements, assert one names the version
+    steps:
+      - name: find
+        description: Search the announcements feed back to the time
+        task:
+          type: behavior
+          behavior: steam-news-app
+          methodName: find
+          inputs:
+            text: ${{ inputs.version }}
+            since: ${{ inputs.since }}
+            searchContents: ${{ inputs.searchContents }}
+            feeds:
+              - steam_community_announcements
+      - name: posted
+        description: |-
+          An announcement names the version; fails only when the whole
+          window was searched without one
+        dependsOn:
+          - step: find
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: |-
+            data.latest("steam-news-app", "find").attributes.found ||
+            !data.latest("steam-news-app", "find").attributes.complete
+          message: |-
+            No announcement since ${{ inputs.since }} names
+            ${{ inputs.version }}
+          severity: high
+      - name: window-searched
+        description: |-
+          A not-found answer is trusted only when the search reached the
+          start time
+        dependsOn:
+          - step: find
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: |-
+            data.latest("steam-news-app", "find").attributes.found ||
+            data.latest("steam-news-app", "find").attributes.complete
+          message: |-
+            The search stopped at
+            ${{ data.latest("steam-news-app", "find").attributes.searched }}
+            posts before reaching ${{ inputs.since }}
+          severity: medium

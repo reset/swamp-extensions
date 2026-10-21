@@ -1,0 +1,11 @@
+type: '@reset/itch'
+typeVersion: 2026.10.21.1
+id: 6c0e5b2a-8d41-4f7e-9b3a-2e1d7c9f4a58
+name: itch-game
+version: 1
+tags: {}
+globalArguments:
+  target: studio/game
+  butler: butler
+  apiKey: '${{ vault.get(default, itch-api-key) }}'
+methods: {}
