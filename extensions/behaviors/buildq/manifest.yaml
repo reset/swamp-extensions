@@ -1,0 +1,24 @@
+manifestVersion: 1
+name: "@reset/buildq"
+version: "2026.10.21.1"
+license: MIT
+description: |-
+  Drive a buildq coordinator through its HTTP API, in Buildkite's shape:
+  list and read builds, read a job's log tail, artifacts and annotations,
+  the queue and the agents, and rebuild, cancel and unblock builds, each
+  written as a resource a workflow can assert on.
+repository: https://github.com/reset/swamp-extensions
+paths:
+  base: manifest
+behaviors:
+  - buildq.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+labels:
+  - buildq
+  - ci
+  - buildkite
+  - continuous-integration
+# Empty: the behavior is plain fetch and runs wherever swamp does.
+platforms: []

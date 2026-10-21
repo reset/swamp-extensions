@@ -1,0 +1,14 @@
+type: '@reset/buildq'
+typeVersion: 2026.10.21.1
+id: fd2b11a2-995f-4415-8857-2082e93fea97
+name: buildq
+version: 1
+tags: {}
+globalArguments:
+  host: 'https://buildq.reset.dev'
+  owner: reset
+  repo: swamp-extensions
+  token: '${{ vault.get(default, buildq-forge-token) }}'
+  accessClientId: '${{ vault.get(default, buildq-access-client-id) }}'
+  accessClientSecret: '${{ vault.get(default, buildq-access-client-secret) }}'
+methods: {}
