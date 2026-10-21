@@ -1,0 +1,75 @@
+id: 3f8b6d2e-1a7c-4e95-b0d4-7c2a9e5f1b63
+name: itch-push
+description: |-
+  Push a build directory to an itch.io channel, wait within a deadline
+  for itch.io to finish processing it, and fail unless the channel's head
+  is the pushed build and it completed.
+version: 1
+tags: {}
+inputs:
+  properties:
+    directory:
+      type: string
+      description: Build directory or .zip to push, relative to the repository
+    channel:
+      type: string
+      description: Channel to push to, such as windows-beta or linux-stable
+    userVersion:
+      type: string
+      default: ''
+      description: Version number recorded with the build. Empty records none.
+    waitSeconds:
+      type: integer
+      default: 1800
+      description: |-
+        How long to wait for itch.io to finish processing the build before
+        the run fails.
+  required:
+    - directory
+    - channel
+jobs:
+  - name: push
+    description: Push the build, wait for processing, assert the channel is ready
+    steps:
+      - name: push
+        description: Upload the build with butler push
+        task:
+          type: behavior
+          behavior: itch-game
+          methodName: push
+          inputs:
+            directory: ${{ inputs.directory }}
+            channel: ${{ inputs.channel }}
+            userVersion: ${{ inputs.userVersion }}
+      - name: status
+        description: Read the channel until its build is ready, failed or late
+        dependsOn:
+          - step: push
+            condition:
+              type: succeeded
+        task:
+          type: behavior
+          behavior: itch-game
+          methodName: status
+          inputs:
+            channel: ${{ inputs.channel }}
+            waitSeconds: ${{ inputs.waitSeconds }}
+      - name: ready
+        description: The pushed build is the channel's head and it completed
+        dependsOn:
+          - step: status
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: |-
+            data.latest("itch-game", "status").attributes.ready &&
+            data.latest("itch-game", "status").attributes.channels[0].head.id
+            == data.latest("itch-game", "push").attributes.buildId
+          message: |-
+            ${{ inputs.channel }} is not ready with build
+            ${{ data.latest("itch-game", "push").attributes.buildId }}:
+            failed ${{ data.latest("itch-game", "status").attributes.failed }},
+            timed out
+            ${{ data.latest("itch-game", "status").attributes.timedOut }}
+          severity: high

@@ -1,0 +1,12 @@
+type: '@reset/patch-notes'
+typeVersion: 2026.10.21.1
+id: ea841b51-0a56-4fef-9de1-59baf4c6ad18
+name: repo-notes
+version: 1
+tags: {}
+globalArguments:
+  forge: github
+  owner: reset
+  repo: swamp-extensions
+  base: main
+methods: {}

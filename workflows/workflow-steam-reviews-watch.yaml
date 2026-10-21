@@ -1,0 +1,75 @@
+id: 3c577f8a-f0ab-4254-9533-171507d76f59
+name: steam-reviews-watch
+description: |-
+  Read a Steam app's review score and the reviews written in the last few
+  days, and fail when the window's positive share falls below a threshold.
+version: 1
+tags: {}
+inputs:
+  properties:
+    days:
+      type: number
+      default: 3
+      description: How many days back from now the window reaches.
+    minPositiveShare:
+      type: number
+      default: 0.7
+      description: |-
+        The run fails when the window's positive reviews are a smaller share
+        than this, from 0 to 1. A window with no reviews passes.
+    maxPages:
+      type: integer
+      default: 10
+      description: Most pages of 100 reviews to read from the window.
+  required: []
+jobs:
+  - name: watch
+    description: Read the score and the window, assert it is positive enough
+    steps:
+      - name: summary
+        description: The app's review score and totals
+        task:
+          type: model_method
+          modelIdOrName: steam-reviews
+          methodName: summary
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: recent
+        description: Reviews written in the window, counted by vote and language
+        task:
+          type: model_method
+          modelIdOrName: steam-reviews
+          methodName: recent
+          inputs:
+            days: ${{ inputs.days }}
+            maxPages: ${{ inputs.maxPages }}
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: positive-enough
+        description: The window holds no reviews, or enough of them are positive
+        task:
+          type: assert
+          expr: |-
+            int(data.latest("steam-reviews", "recent").attributes.count) == 0 ||
+            double(data.latest("steam-reviews", "recent")
+              .attributes.positiveShare)
+            >= double(inputs.minPositiveShare)
+          message: |-
+            ${{ data.latest("steam-reviews", "recent").attributes.positive }} of
+            ${{ data.latest("steam-reviews", "recent").attributes.count }}
+            reviews in the window are positive, below
+            ${{ inputs.minPositiveShare }}
+          severity: high
+        dependsOn:
+          - step: summary
+            condition:
+              type: succeeded
+          - step: recent
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+    dependsOn: []
+    weight: 0

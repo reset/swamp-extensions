@@ -1,0 +1,9 @@
+type: '@reset/steam-news'
+typeVersion: 2026.10.21.1
+id: 06660cf4-79db-49a8-816b-999faebaa06d
+name: steam-news-app
+version: 1
+tags: {}
+globalArguments:
+  appId: 480
+methods: {}

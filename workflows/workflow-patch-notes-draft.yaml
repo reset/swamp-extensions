@@ -1,0 +1,86 @@
+id: 05691949-8013-4665-8ed7-1f161271b0dd
+name: patch-notes-draft
+description: |-
+  Gather the pull requests merged between two refs, fail unless enough of
+  them were found and the listing was complete, then draft the notes and
+  render them as Steam BBCode.
+version: 1
+tags: {}
+inputs:
+  properties:
+    start:
+      type: string
+      description: Ref the notes start after, usually the previous release tag
+    end:
+      type: string
+      default: main
+      description: Ref the notes end at, inclusive
+    minimum:
+      type: integer
+      default: 1
+      description: The run fails when fewer pull requests than this were merged
+    title:
+      type: string
+      default: Patch notes
+      description: Heading of the notes
+    exclude:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Categories left out of the notes, such as internal
+  required:
+    - start
+jobs:
+  - name: notes
+    description: Gather, check the count, draft, render for Steam
+    steps:
+      - name: gather
+        description: Resolve both refs and list the merged pull requests
+        task:
+          type: behavior
+          behavior: repo-notes
+          methodName: gather
+          inputs:
+            start: ${{ inputs.start }}
+            end: ${{ inputs.end }}
+      - name: enough
+        description: The listing was complete and holds at least the minimum
+        dependsOn:
+          - step: gather
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: |-
+            !data.latest("repo-notes", "gather").attributes.truncated
+            && int(data.latest("repo-notes", "gather").attributes.count)
+            >= int(inputs.minimum)
+          message: |-
+            ${{ data.latest("repo-notes", "gather").attributes.count }}
+            pull requests merged (minimum ${{ inputs.minimum }}), truncated
+            ${{ data.latest("repo-notes", "gather").attributes.truncated }}
+          severity: high
+      - name: draft
+        description: Draft Markdown notes grouped by category
+        dependsOn:
+          - step: enough
+            condition:
+              type: succeeded
+        task:
+          type: behavior
+          behavior: repo-notes
+          methodName: draft
+          inputs:
+            title: ${{ inputs.title }}
+            exclude: ${{ inputs.exclude }}
+      - name: bbcode
+        description: Render the draft as Steam announcement BBCode
+        dependsOn:
+          - step: draft
+            condition:
+              type: succeeded
+        task:
+          type: behavior
+          behavior: repo-notes
+          methodName: bbcode

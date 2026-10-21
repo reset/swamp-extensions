@@ -32,6 +32,12 @@ inputs:
         - player.gd
       description: |-
         GDScript files to parse, as res:// paths relative to the project
+    instance:
+      type: string
+      default: godot-game
+      description: |-
+        The @reset/godot instance under models/ naming the
+        project to import, check and export.
   required: []
 jobs:
   - name: build
@@ -41,7 +47,7 @@ jobs:
         description: Reimport the project's assets with --headless --import
         task:
           type: model_method
-          modelIdOrName: godot-game
+          modelIdOrName: ${{ inputs.instance }}
           methodName: import
         dependsOn: []
         weight: 0
@@ -50,7 +56,7 @@ jobs:
         description: Parse each script with --check-only
         task:
           type: model_method
-          modelIdOrName: godot-game
+          modelIdOrName: ${{ inputs.instance }}
           methodName: check
           inputs:
             scripts: ${{ inputs.scripts }}
@@ -65,12 +71,13 @@ jobs:
         task:
           type: assert
           expr: |-
-            int(data.latest("godot-game", "import").attributes.errorCount) == 0
-            && int(data.latest("godot-game", "check").attributes.failed) == 0
+            int(data.latest(inputs.instance, "import").attributes.errorCount)
+            == 0 &&
+            int(data.latest(inputs.instance, "check").attributes.failed) == 0
           message: |-
-            ${{ data.latest("godot-game", "import").attributes.errorCount }}
+            ${{ data.latest(inputs.instance, "import").attributes.errorCount }}
             import error lines,
-            ${{ data.latest("godot-game", "check").attributes.failed }}
+            ${{ data.latest(inputs.instance, "check").attributes.failed }}
             scripts failed to parse
           severity: high
         dependsOn:
@@ -83,7 +90,7 @@ jobs:
         description: Export the preset and record the produced file
         task:
           type: model_method
-          modelIdOrName: godot-game
+          modelIdOrName: ${{ inputs.instance }}
           methodName: export
           inputs:
             preset: ${{ inputs.preset }}
@@ -100,7 +107,7 @@ jobs:
         task:
           type: assert
           expr: |-
-            int(data.latest("godot-game", "export").attributes.fileSize) > 0
+            int(data.latest(inputs.instance, "export").attributes.fileSize) > 0
           message: the export produced an empty file
           severity: high
         dependsOn:

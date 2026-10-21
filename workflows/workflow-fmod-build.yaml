@@ -16,6 +16,12 @@ inputs:
       description: |-
         The platform to build for, as the project's build preferences name
         it
+    instance:
+      type: string
+      default: fmod-examples
+      description: |-
+        The @reset/fmod instance under models/ naming the
+        project to build.
   required:
     - bank
 jobs:
@@ -28,7 +34,7 @@ jobs:
           scripting API
         task:
           type: behavior
-          behavior: fmod-examples
+          behavior: ${{ inputs.instance }}
           methodName: inspect
       - name: bank-exists
         description: |-
@@ -42,7 +48,7 @@ jobs:
           type: assert
           expr: |-
             inputs.bank in
-            data.latest("fmod-examples", "banks").attributes.names
+            data.latest(inputs.instance, "banks").attributes.names
           message: Bank ${{ inputs.bank }} is not in the project
           severity: high
       - name: build
@@ -53,7 +59,7 @@ jobs:
               type: succeeded
         task:
           type: behavior
-          behavior: fmod-examples
+          behavior: ${{ inputs.instance }}
           methodName: build
           inputs:
             banks:
@@ -70,6 +76,6 @@ jobs:
           type: assert
           expr: |-
             inputs.platform in
-            data.latest("fmod-examples", "build").attributes.platformsBuilt
+            data.latest(inputs.instance, "build").attributes.platformsBuilt
           message: ${{ inputs.platform }} was not built
           severity: high

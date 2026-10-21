@@ -1,0 +1,26 @@
+manifestVersion: 1
+name: "@reset/patch-notes"
+version: "2026.10.21.1"
+license: MIT
+description: |-
+  Draft a game's patch notes from merged pull requests: gather the pull
+  requests merged into a branch between two tags from a Forgejo, Gitea or
+  GitHub repository, classify them by patch: labels, write Markdown notes
+  grouped by category, and render them as Steam announcement BBCode, each
+  written as a resource a workflow can assert on.
+repository: https://github.com/reset/swamp-extensions
+paths:
+  base: manifest
+behaviors:
+  - patch-notes.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+labels:
+  - patch-notes
+  - forgejo
+  - github
+  - steam
+  - game-development
+# Empty: the behavior is plain fetch and runs wherever swamp does.
+platforms: []

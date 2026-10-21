@@ -1,0 +1,25 @@
+manifestVersion: 1
+name: "@reset/steam-reviews"
+version: "2026.10.21.1"
+license: MIT
+description: |-
+  Read a Steam app's public user reviews through Steamworks' documented
+  IUserReviewsService/GetAppReviews: the review score and totals, and the
+  reviews created in a window counted positive and negative overall and by
+  language, each written as a resource a workflow can assert on. Keeps
+  review ids and votes, not authors or text, unless asked.
+repository: https://github.com/reset/swamp-extensions
+paths:
+  base: manifest
+behaviors:
+  - steam-reviews.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+labels:
+  - steam
+  - game-development
+  - reviews
+  - observability
+# Empty: the behavior is plain fetch and runs wherever swamp does.
+platforms: []

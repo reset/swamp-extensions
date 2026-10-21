@@ -18,7 +18,8 @@ Swamp team: 3717.
   this repository. Refresh them by hand from a new release; never let `swamp repo init` write into
   `~/.claude/skills`.
 - Published extensions talk to documented interfaces only: the Rollbar-compatible crash API (Rollbar
-  itself, or crashq with one host change), steamcmd, Unity batch mode, Wwise's WAAPI, Forgejo's API.
+  itself, or crashq with one host change), steamcmd, Steam's Web API, Unity batch mode, Wwise's WAAPI,
+  itch.io's butler, Forgejo's and GitHub's REST APIs.
   Someone with Swamp and no SMK can use them on day one.
 - Publishing an extension, creating or renaming a collective, posting to the feed, joining the Discord
   as reset and filing Lab issues or pull requests each need Jamie's explicit authorization. Friction
