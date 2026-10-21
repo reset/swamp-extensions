@@ -5,7 +5,7 @@ name: forge
 version: 1
 tags: {}
 globalArguments:
-  host: 'https://git.reset.dev'
+  host: '${{ vault.get(default, forge-host) }}'
   token: '${{ vault.get(default, forge-token) }}'
   accessClientId: '${{ vault.get(default, forge-access-client-id) }}'
   accessClientSecret: '${{ vault.get(default, forge-access-client-secret) }}'

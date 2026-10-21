@@ -5,6 +5,6 @@ name: crashq
 version: 1
 tags: {}
 globalArguments:
-  host: 'https://crashq.karate.company'
+  host: '${{ vault.get(default, crashq-host) }}'
   token: '${{ vault.get(default, crashq-read-token) }}'
 methods: {}

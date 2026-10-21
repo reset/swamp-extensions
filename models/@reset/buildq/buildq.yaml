@@ -5,10 +5,9 @@ name: buildq
 version: 1
 tags: {}
 globalArguments:
-  host: 'https://buildq.reset.dev'
+  host: '${{ vault.get(default, buildq-host) }}'
   owner: reset
   repo: swamp-extensions
-  token: '${{ vault.get(default, buildq-forge-token) }}'
   accessClientId: '${{ vault.get(default, buildq-access-client-id) }}'
   accessClientSecret: '${{ vault.get(default, buildq-access-client-secret) }}'
 methods: {}

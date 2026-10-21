@@ -5,7 +5,7 @@ name: socialq
 version: 1
 tags: {}
 globalArguments:
-  host: 'https://socialq.karate.company'
+  host: '${{ vault.get(default, socialq-host) }}'
   clientId: '${{ vault.get(default, socialq-client-id) }}'
   clientSecret: '${{ vault.get(default, socialq-client-secret) }}'
 methods: {}
