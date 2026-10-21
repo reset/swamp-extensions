@@ -1,0 +1,109 @@
+id: 7b1f3a0e-5c2d-4e8f-9a6b-2d4c8e1f7a35
+name: social-coverage
+description: |-
+  Read the social calendar's coverage and today's activity, then fail
+  when a connected account has never been read, when the oldest read of
+  a connected account is older than the threshold, or when a collection
+  job today is dead.
+version: 1
+tags: {}
+inputs:
+  properties:
+    days:
+      type: integer
+      default: 2
+      description: |-
+        The run fails when the recorder's last read of any connected
+        account is more than this many whole days old. The daily cron
+        reads every account once a day, so the default allows one missed
+        day.
+  required: []
+jobs:
+  - name: coverage
+    description: Read coverage and activity and check both against the threshold
+    steps:
+      - name: read-calendar
+        description: |-
+          The last 31 days of the calendar and the recorder's coverage
+          per account
+        task:
+          type: model_method
+          modelIdOrName: socialq
+          methodName: calendar
+          inputs: {}
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: read-activity
+        description: Today's collection jobs per account with their states
+        task:
+          type: model_method
+          modelIdOrName: socialq
+          methodName: activity
+          inputs: {}
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: every-account-read
+        description: No connected account is still unread by the recorder
+        task:
+          type: assert
+          expr: |-
+            int(data.latest("socialq", "coverage").attributes.neverRead) == 0
+          message: |-
+            ${{ data.latest("socialq", "coverage").attributes.neverRead }} of
+            ${{ data.latest("socialq", "coverage").attributes.connected }}
+            connected accounts have never been read by the recorder
+          severity: high
+        dependsOn:
+          - step: read-calendar
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: read-recently
+        description: |-
+          The oldest read of a connected account is within the
+          threshold
+        task:
+          type: assert
+          expr: |-
+            int(data.latest("socialq", "coverage").attributes.oldestReadAgeDays)
+            <= int(inputs.days)
+          # yamllint disable rule:line-length
+          message: |-
+            the recorder last read
+            ${{ data.latest("socialq", "coverage").attributes.oldestReadHandle }}
+            ${{ data.latest("socialq", "coverage").attributes.oldestReadAgeDays }}
+            days ago, threshold ${{ inputs.days }}
+          # yamllint enable rule:line-length
+          severity: high
+        dependsOn:
+          - step: read-calendar
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: no-dead-jobs
+        description: No collection job today has given up
+        task:
+          type: assert
+          expr: |-
+            int(data.latest("socialq", "activity").attributes.byState.dead) == 0
+          # yamllint disable rule:line-length
+          message: |-
+            ${{ data.latest("socialq", "activity").attributes.byState.dead }}
+            collection jobs are dead today
+            (${{ data.latest("socialq", "activity").attributes.byState.failed }}
+            failed, ${{ data.latest("socialq", "activity").attributes.byState.unknown }}
+            unknown)
+          # yamllint enable rule:line-length
+          severity: high
+        dependsOn:
+          - step: read-activity
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+    dependsOn: []
+    weight: 0

@@ -1,0 +1,24 @@
+manifestVersion: 1
+name: "@reset/socialq"
+version: "2026.10.21.1"
+license: MIT
+description: |-
+  Read a socialq deployment through its HTTP API with a Cloudflare Access
+  service token: health, the token's identity, accounts, the calendar and
+  the recorder's coverage of it, the wrap-up report, the day's activity,
+  the job ledger and the taxonomy, each written as a resource a workflow
+  can assert on. Read-only by construction.
+repository: https://github.com/reset/swamp-extensions
+paths:
+  base: manifest
+behaviors:
+  - socialq.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+labels:
+  - social
+  - socialq
+  - observability
+# Empty: the behavior is plain fetch and runs wherever swamp does.
+platforms: []
