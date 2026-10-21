@@ -21,8 +21,5 @@ is done by hand until the SMK verb exists, and the flight is the specification f
 | wwise-generate    | `@reset/wwise`         | none in SMK yet: by hand in Wwise                                       |
 | host-report       | lab behaviors          | the service probe and `smk host`                                        |
 
-> > > > > > > 59c6d34 (Add @reset/socialq, a read-only behavior over socialq's API, with the social-coverage workflow)
-> > > > > > > | merge-gate | `@reset/forgejo-pulls` | `smk pr merge`, which posts the marker, and automerge, which acts on it |
-
 Measurements the flight owes, per workload, for the retrospective: time to add the capability,
 tokens per run, what the data layer changed in a diagnosis, and what left the machine.

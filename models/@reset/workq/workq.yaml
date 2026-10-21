@@ -5,7 +5,7 @@ name: workq
 version: 1
 tags: {}
 globalArguments:
-  host: 'https://workq.karate.company'
+  host: '${{ vault.get(default, workq-host) }}'
   clientId: '${{ vault.get(default, workq-access-client-id) }}'
   clientSecret: '${{ vault.get(default, workq-access-client-secret) }}'
   org: smk
