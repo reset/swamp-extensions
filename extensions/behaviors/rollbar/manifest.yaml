@@ -1,11 +1,12 @@
 manifestVersion: 1
 name: "@reset/rollbar"
-version: "2026.10.20.1"
+version: "2026.10.21.1"
 license: MIT
 description: |-
   Drive a Rollbar-compatible crash-reporting API (api.rollbar.com, or
-  crashq with one host change): list and read items and occurrences,
-  resolve, mute and assign items, and record deploys, each written as a
+  crashq with one host change): list and read items, occurrences and
+  item events, resolve, mute and assign items, record deploys, and read
+  the occurrence, activation and top-item reports, each written as a
   resource a workflow can assert on.
 repository: https://github.com/reset/swamp-extensions
 paths:

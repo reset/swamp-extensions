@@ -9,6 +9,7 @@ is done by hand until the SMK verb exists, and the flight is the specification f
 | Workflow          | Behavior         | Relied on                                                         |
 | ----------------- | ---------------- | ----------------------------------------------------------------- |
 | crash-backlog     | `@reset/rollbar` | the `crash` CLI and the crash-triage skill against crashq         |
+| crash-trend       | `@reset/rollbar` | the `crash` CLI and the crash-triage skill against crashq         |
 | build-check       | `@reset/buildq`  | `smk ci`, and buildq's own commit status and build email          |
 | release-readiness | `@reset/workq`   | `smk issue`, `smk patch` and the crash-triage skill against workq |
 | steam-promote     | `@reset/steam`   | the steam-publish skill's procedure                               |
