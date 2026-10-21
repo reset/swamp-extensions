@@ -46,6 +46,9 @@ Swamp team: 3717.
 - `workflows/`: the workflows this repository runs. `models/`: behavior instances the workflows use.
 - `docs/`: field notes that become feed posts, kept here until they are published.
 - `.claude/skills/swamp`, `.claude/skills/swamp-getting-started`: the vendor's skills, verbatim.
+- `serve/`: the release `swamp serve` runs from on a Linux host (its own flake, nixpkgs only) and its user
+  unit; `bin/serve-deploy <host>` installs a revision with smk's service verb. docs/workloads.md
+  says which workflows it schedules and what the others need.
 - `vaults/`: vault declarations (no secrets; `local_encryption` keeps its key under `.swamp/`, ignored).
 
 ## Checks
