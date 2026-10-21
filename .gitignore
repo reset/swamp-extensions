@@ -77,3 +77,6 @@ Thumbs.db
 # smk: this repository's own lines follow
 .swamp/
 .swamp-sources.yaml
+# What the godot-build workflow writes beside the example project: Godot's import cache and the export.
+extensions/behaviors/godot/example-project/.godot/
+extensions/behaviors/godot/build/

@@ -1,0 +1,28 @@
+# swamp serve against this repository's checkout, as the user it runs as. bin/serve-deploy installs it
+# with smk service install, which links this file from the release's profile; @out@ is the release.
+[Unit]
+Description=swamp serve: the workflows' schedules in ~/repo (swamp-extensions serve/)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The checkout serve reads workflows, models and vaults from, and writes .swamp/ data into.
+Environment=SWAMP_REPO_DIR=%h/repo
+# Extensions load through an embedded runtime under SWAMP_HOME; SWAMP_CONFIG_DIR holds the cached
+# sign-in proof serve refreshes hourly (swamp serve --help, "Service deployments").
+Environment=SWAMP_HOME=%h/.swamp
+Environment=SWAMP_CONFIG_DIR=%h/.config/swamp
+# What a method runs by name: godot from the release, and the host's own tools after it.
+Environment=PATH=@out@/bin:/usr/bin:/bin
+# SWAMP_API_KEY and SWAMP_SIGNIN_TOKEN: the collective token serve passes swamp-club's account gate
+# with. Written owner-only by bin/serve-deploy, never in the repository.
+EnvironmentFile=%h/.config/swamp-serve/env
+# Token auth on loopback: every user on the host reaches 127.0.0.1, and a run here reads the vault.
+ExecStart=@out@/bin/swamp serve --host 127.0.0.1 --port 9090 --auth-mode token --admins user:operator --no-color
+Restart=on-failure
+RestartSec=30
+Nice=10
+
+[Install]
+WantedBy=default.target
