@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Install swamp serve on a Linux host as its swamp-serve user, from a revision of this repository on
+# GitHub: the user's checkout moves to the revision, the release in serve/ is built there, and smk's
+# service verb installs it, rolling back unless the new serve answers its health route. Serve then
+# runs every workflow in workflows/ that declares trigger.schedule (docs/workloads.md).
+#
+# The host is prepared first by whoever holds root on it: the swamp-serve system user, home
+# /opt/swamp-serve, lingering. Nothing here needs root, and nothing here is written to this checkout.
+#
+# Credentials: swamp-club's account gate admits serve on a collective token with the serve:* scope and
+# the signin token issued with it, read from the 1Password item SWAMP_SERVE_OP_ITEM names (fields
+# SWAMP_API_KEY and SWAMP_SIGNIN_TOKEN). They reach the host on ssh's stdin, never a command line,
+# and are written owner-only to ~/.config/swamp-serve/env there.
+#
+# Usage: bin/serve-deploy <host> [<revision>]   (an ssh host; the revision defaults to main's head)
+# Exit: 0 installed and healthy, 1 a step failed or the install rolled back, 2 the call is wrong.
+set -euo pipefail
+
+if [[ $# -lt 1 || $# -gt 2 || "$1" == -* ]]; then
+  echo >&2 "usage: bin/serve-deploy <host> [<revision>]"
+  exit 2
+fi
+readonly host="$1"
+readonly repository=https://github.com/reset/swamp-extensions
+readonly op_item="${SWAMP_SERVE_OP_ITEM:-swamp-serve collective token}"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly root
+
+revision="${2:-}"
+if [[ -z "$revision" ]]; then
+  revision="$(git ls-remote "$repository" refs/heads/main | cut -f1)"
+fi
+if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then
+  echo >&2 "serve-deploy: '$revision' is not a full commit id"
+  exit 2
+fi
+readonly revision
+
+# smk's service verb, as the smk this repository pins: its x86_64-linux path, which the host's Nix
+# daemon substitutes from the smk cache, so the host needs no access to smk's repository.
+smk="$(nix eval --raw --impure --expr "(builtins.getFlake \"path:$root/.nix\").inputs.smk.packages.x86_64-linux.smk.outPath")"
+readonly smk
+
+env_file="$(
+  for field in SWAMP_API_KEY SWAMP_SIGNIN_TOKEN; do
+    value="$(op item get "$op_item" --fields "label=$field" --reveal)"
+    if [[ -z "$value" || "$value" == *$'\n'* ]]; then
+      echo >&2 "serve-deploy: 1Password item '$op_item' has no single-line $field"
+      exit 1
+    fi
+    printf '%s=%s\n' "$field" "$value"
+  done
+)"
+
+echo >&2 "--- $revision of $repository on $host as swamp-serve"
+# The script is expanded by the remote shell; the credentials are its stdin.
+# shellcheck disable=SC2016
+printf '%s\n' "$env_file" | ssh -o BatchMode=yes -o LogLevel=ERROR "$host" \
+  "sudo -n -u swamp-serve -H bash -c $(printf '%q' 'set -euo pipefail
+revision="$1" repository="$2" smk="$3"
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export PATH="/nix/var/nix/profiles/default/bin:/usr/bin:/bin"
+export GIT_CONFIG_GLOBAL=/dev/null
+cd "$HOME"
+
+install -d -m 700 .config/swamp-serve
+staged="$(mktemp .config/swamp-serve/.env.XXXXXX)"
+cat >"$staged"
+chmod 600 "$staged"
+mv -f "$staged" .config/swamp-serve/env
+
+[[ -d repo/.git ]] || git clone --quiet --no-checkout "$repository" repo
+git -C repo fetch --quiet origin "$revision"
+git -C repo checkout --quiet --detach "$revision"
+
+release="$(nice nix build --no-link --print-out-paths "path:$HOME/repo/serve")"
+echo >&2 "release: $release"
+nix-store --realise "$smk" >/dev/null
+"$smk/bin/smk" service install "$release" --unit swamp-serve.service \
+    --health http://127.0.0.1:9090/health --timeout 180
+curl -fsS http://127.0.0.1:9090/health')" -- "$revision" "$repository" "$smk"
+echo >&2 "serve-deploy: $revision serves on $host"

@@ -1,0 +1,125 @@
+id: ec3f5251-59a1-4ffb-b9eb-8bd05fe47322
+name: merge-gate
+description: |-
+  For one pull request, fail unless it is open, mergeable and not a draft
+  and every required status context on its head commit passed; then wait
+  for an operator's approval and ask the merge bot to merge it.
+version: 1
+tags: {}
+inputs:
+  properties:
+    owner:
+      type: string
+      description: The repository's owner on the forge.
+    repo:
+      type: string
+      description: The repository's name.
+    number:
+      type: integer
+      description: The pull request's number.
+    contexts:
+      type: array
+      items:
+        type: string
+      default:
+        - buildq
+      description: |-
+        The status contexts that must report success on the head commit
+        before the merge is asked for.
+  required:
+    - owner
+    - repo
+    - number
+jobs:
+  - name: gate
+    description: Read the pull request and its statuses, assert, approve, ask
+    steps:
+      - name: read-pull
+        description: The pull request's state, mergeable verdict and head
+        task:
+          type: behavior
+          behavior: forge
+          methodName: pull
+          inputs:
+            owner: ${{ inputs.owner }}
+            repo: ${{ inputs.repo }}
+            number: ${{ inputs.number }}
+      - name: open-and-mergeable
+        description: Open, not a draft, not merged, and the forge can merge it
+        dependsOn:
+          - step: read-pull
+            condition:
+              type: succeeded
+        # yamllint disable rule:line-length
+        task:
+          type: assert
+          expr: |-
+            data.latest("forge", "pull-" + inputs.owner + "-" + inputs.repo + "-" + string(inputs.number)).attributes.state == "open" &&
+            data.latest("forge", "pull-" + inputs.owner + "-" + inputs.repo + "-" + string(inputs.number)).attributes.draft == false &&
+            data.latest("forge", "pull-" + inputs.owner + "-" + inputs.repo + "-" + string(inputs.number)).attributes.merged == false &&
+            data.latest("forge", "pull-" + inputs.owner + "-" + inputs.repo + "-" + string(inputs.number)).attributes.mergeable == true
+          message: |-
+            ${{ inputs.owner }}/${{ inputs.repo }}#${{ inputs.number }} is
+            ${{ data.latest("forge", "pull-" + inputs.owner + "-" + inputs.repo + "-" + string(inputs.number)).attributes.state }},
+            draft ${{ data.latest("forge", "pull-" + inputs.owner + "-" + inputs.repo + "-" + string(inputs.number)).attributes.draft }},
+            merged ${{ data.latest("forge", "pull-" + inputs.owner + "-" + inputs.repo + "-" + string(inputs.number)).attributes.merged }},
+            mergeable ${{ data.latest("forge", "pull-" + inputs.owner + "-" + inputs.repo + "-" + string(inputs.number)).attributes.mergeable }}
+          severity: high
+      - name: read-statuses
+        description: The latest status of each context on the head commit
+        dependsOn:
+          - step: open-and-mergeable
+            condition:
+              type: succeeded
+        task:
+          type: behavior
+          behavior: forge
+          methodName: statuses
+          inputs:
+            owner: ${{ inputs.owner }}
+            repo: ${{ inputs.repo }}
+            number: ${{ inputs.number }}
+            required: ${{ inputs.contexts }}
+      - name: required-passed
+        description: Every required context reports success
+        dependsOn:
+          - step: read-statuses
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: |-
+            data.latest("forge", "statuses-" + inputs.owner + "-" + inputs.repo + "-" + string(inputs.number)).attributes.required.passed == true
+          message: |-
+            required contexts unmet on
+            ${{ inputs.owner }}/${{ inputs.repo }}#${{ inputs.number }}:
+            ${{ data.latest("forge", "statuses-" + inputs.owner + "-" + inputs.repo + "-" + string(inputs.number)).attributes.required.unmet }}
+          severity: high
+      - name: approve
+        description: |-
+          An operator confirms the ask. The run suspends here; approve it
+          with swamp workflow approve merge-gate approve --run <id>.
+        dependsOn:
+          - step: required-passed
+            condition:
+              type: succeeded
+        task:
+          type: manual_approval
+          prompt: |-
+            Ask the merge bot to merge
+            ${{ inputs.owner }}/${{ inputs.repo }}#${{ inputs.number }}?
+          timeout: 3600
+      - name: ask-merge
+        description: Post the merge marker as a comment and re-read the pull
+        dependsOn:
+          - step: approve
+            condition:
+              type: succeeded
+        task:
+          type: behavior
+          behavior: forge
+          methodName: ask-merge
+          inputs:
+            owner: ${{ inputs.owner }}
+            repo: ${{ inputs.repo }}
+            number: ${{ inputs.number }}

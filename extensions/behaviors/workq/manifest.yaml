@@ -1,0 +1,24 @@
+manifestVersion: 1
+name: "@reset/workq"
+version: "2026.10.21.1"
+license: MIT
+description: |-
+  Drive workq's work-tracking API as a service caller: read who you are,
+  an org's projects, a project's items with the API's filters, one item and
+  its history, create and change items at the revision read, comment, and
+  read releases and sprints, each written as a resource a workflow can
+  assert on.
+repository: https://github.com/reset/swamp-extensions
+paths:
+  base: manifest
+behaviors:
+  - workq.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+labels:
+  - work-tracking
+  - workq
+  - issues
+# Empty: the behavior is plain fetch and runs wherever swamp does.
+platforms: []

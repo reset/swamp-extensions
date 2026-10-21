@@ -2,16 +2,17 @@
 
 A Swamp behavior for any Rollbar-compatible crash-reporting API: api.rollbar.com
 itself, or a service that answers the same endpoints, such as crashq, with one
-host change. It lists and reads items (grouped errors) and their occurrences,
-resolves, mutes and assigns items, and records and lists deploys. Every method
-writes what it read as a versioned resource, so a workflow can assert on the
-crash backlog with CEL and a report can read it later.
+host change. It lists and reads items (grouped errors), their occurrences and
+their history, resolves, mutes and assigns items, records and lists deploys,
+reads the three reports (occurrence counts, activated counts and the top active
+items) and tests a project's fingerprint rules against one occurrence. Every
+method writes what it read as a versioned resource, so a workflow can assert on
+the crash backlog and its trend with CEL and a report can read it later.
 
 It needs nothing beyond Swamp and a project access token. It talks to the
 documented HTTP API only: `X-Rollbar-Access-Token`, the
-`{"err": 0, "result":
-...}` envelope, and the item, instance, deploy and deploys
-routes under `/api/1/`.
+`{"err": 0, "result": ...}` envelope, and the item, instance, deploy, deploys
+and reports routes under `/api/1/`.
 
 ## Install
 
@@ -51,7 +52,7 @@ Global arguments:
 | ------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `host`        | `https://api.rollbar.com` | Base URL of the API.                                                                                                              |
 | `token`       | required                  | Project access token, sensitive. `read` lists and reads, `write` resolves, mutes and assigns, `post_server_item` records deploys. |
-| `environment` | none                      | Default environment filter for `items` and `deploys`, and the default target of `deploy`. A method argument overrides it.         |
+| `environment` | none                      | Default environment filter for `items`, `deploys` and the three reports, and the default target of `deploy`. A method argument overrides it. |
 
 ## Methods
 
@@ -61,6 +62,9 @@ swamp behavior run my-game item --arg counter=42
 swamp behavior run my-game occurrences --arg counter=42 --arg limit=50
 swamp behavior run my-game resolve --arg counter=42 --arg resolvedInVersion=1.4.2
 swamp behavior run my-game deploy --arg environment=production --arg revision=abc123
+swamp behavior run my-game top-active --arg hours=24
+swamp behavior run my-game occurrence-counts --arg bucketSize=86400
+swamp behavior run my-game events --arg counter=42
 ```
 
 | Method        | Arguments                                                          | Calls                                                  | Writes                  |
@@ -73,11 +77,19 @@ swamp behavior run my-game deploy --arg environment=production --arg revision=ab
 | `assign`      | `id` or `counter`, `assignedUserId`                                | `PATCH /api/1/item/{id}` then a re-read                | `item-<counter>`        |
 | `deploy`      | `revision`, `environment`, `localUsername`, `comment`, `status`    | `POST /api/1/deploy/`                                  | `deploy-<id>`           |
 | `deploys`     | `environment`, `page` (1)                                          | `GET /api/1/deploys/`, 20 per page                     | `deploys`               |
+| `occurrence-counts` | `bucketSize` (86400), `environments`, `minLevel` (error), `maxLevel`, `itemId` | `GET /api/1/reports/occurrence_counts`    | `occurrence-counts`     |
+| `activated-counts` | `buckets` (60), `environments`                              | `GET /api/1/reports/activated_counts`                  | `activated-counts`      |
+| `top-active`  | `hours` (24), `environments`, `byOccurrences` (false)              | `GET /api/1/reports/top_active_items`                  | `top-active`            |
+| `events`      | `id` or `counter`                                                  | `GET /api/1/item/{id}/events`                          | `events-<counter>`      |
+| `fingerprint-test` | `projectId`, `instance`, `rules`, `ignoreClientFingerprint`  | `POST /api/1/project/{id}/fingerprint_rules/test`, crashq only | `fingerprint-test-<instance>` |
 
 The `summary` resource carries `count`, `byLevel`, `byStatus` and
 `activeErrors`, the number of active items at level error or critical. Each list
 resource carries `truncated: true` when the last page was full, so more rows may
 exist beyond what was fetched.
+
+`environments` is a list; it falls back to the global `environment` and an
+empty list means any environment.
 
 `resolve`, `mute` and `assign` can be repeated without harm. `deploy` cannot:
 each call records one more deploy, so a workflow that may retry the step should
@@ -110,6 +122,54 @@ jobs:
           severity: high
 ```
 
+## Reports
+
+`occurrence-counts` answers 60 buckets of a minute, an hour or a day (the
+default), the last one the current and partial bucket, counting occurrences at
+or above `minLevel` (error by default). `activated-counts` answers 2 to 366
+daily buckets of items first seen or reactivated. Both resources keep the
+buckets as `{timestamp, count}` rows, oldest first, and set `total`,
+`newestTimestamp` and `newestCount` flat, so an assert on today's count is one
+expression:
+
+```yaml
+- name: trend
+  task:
+    type: behavior
+    behavior: my-game
+    methodName: occurrence-counts
+- name: quiet-today
+  dependsOn:
+    - step: trend
+      condition:
+        type: succeeded
+  task:
+    type: assert
+    expr: >-
+      int(data.latest("my-game", "occurrence-counts").attributes.newestCount)
+      < 100
+    message: more than 100 error or critical occurrences today
+```
+
+`top-active` answers the ten active items with the most occurrences over the
+last `hours` (24 by default), ordered by level and then occurrences unless
+`byOccurrences` is set, each with its hourly `counts` and `occurrences`, the sum
+over the window. The resource keeps each item's id, counter, title, level,
+environment and counts, and the unique occurrence count, last occurrence time,
+lifetime total and status when the API reports them.
+
+`events` reads an item's history, oldest first: each event's type (`status`,
+`level`, `assigned_user_id`, `title`, `resolved_in_version` or `comment`), the
+value before and after (a comment's text is the value after), and the user or
+occurrence that caused it. Values are cut to 300 characters.
+
+`fingerprint-test` is crashq's own call and answers 404 on Rollbar. It sends
+one occurrence id (`instance`) and, to try unsaved rules, `rules` and
+`ignoreClientFingerprint`, and keeps what the occurrence groups by: the index
+of the rule that held (absent when the default grouping did), the fingerprint,
+its hash, the title, and the id and counter of the item that counts it, when one
+does. The occurrence itself stays on the server. A `read` token may call it.
+
 ## Errors and rate limits
 
 A refused answer throws a `RollbarError` with the HTTP status and the API's
@@ -125,8 +185,19 @@ Crash occurrences are data about the player who hit the crash. The `occurrences`
 resource keeps the occurrence id, timestamp, environment, code version, level,
 and the exception class and message (cut to 300 characters). It never stores the
 payload: no person block, no custom fields, no frames, no request or server
-data. The resource expires after 30 days and keeps five versions. Items and
-deploys hold no player data.
+data. The resource expires after 30 days and keeps five versions. Items,
+deploys, reports and events hold no player data: the report resources keep
+counts, bucket timestamps, item ids, counters, levels and titles, and
+`fingerprint-test` keeps the rule, fingerprint, hash and title.
+
+## What is left out, and why
+
+Erasure (`DELETE /api/1/instances/?install_id=`, `?person_id=` or `?ip=`) is
+deliberately not a method of a published behavior: an erasure request names a
+person, is answered once by the controller of the data, and belongs in the
+studio's own tooling with its own record, not in a step a workflow can retry or
+a schedule can run. Project, token, user and notification administration are
+account-level calls and stay out for the same reason.
 
 ## Rollbar and crashq
 
@@ -135,6 +206,23 @@ and `last_version` to each item, which the `items` and `item` resources keep
 when present, and accepts `limit` up to 5000 on the instances route, where
 Rollbar pages 20 at a time. Timestamps are Unix seconds of the server's receipt
 time on both.
+
+The three report routes, their parameters and their `[timestamp, count]` rows
+are Rollbar's (its reference documents `bucket_size`, `environments`,
+`min_level`, `max_level` and `item_id` on `occurrence_counts`; `buckets` and
+`environments` on `activated_counts`; `hours`, `environments` and
+`sort=occurrences` on `top_active_items`). Where they differ:
+
+- `top_active_items`: Rollbar's item carries `occurrences` for the window, a
+  numeric level and no status; crashq answers the item as the item calls do,
+  with `total_occurrences` and `status`. The resource reads both: `occurrences`
+  is the API's figure or, failing that, the sum of `counts`.
+- `activated_counts`: Rollbar buckets days in the project's timezone, crashq in
+  UTC. Rollbar also takes `bucket_size`, which only accepts 86400, so it is not
+  sent.
+- `GET /api/1/item/{id}/events` is not in Rollbar's public reference; on
+  crashq it answers the item's events, comments among them.
+- `POST /api/1/project/{id}/fingerprint_rules/test` is crashq only.
 
 ## License
 

@@ -5,6 +5,13 @@ description: |-
   errors, then export a preset and check the produced file.
 version: 1
 tags: {}
+trigger:
+  # Daily on the serve host's swamp serve (serve/, docs/workloads.md).
+  # A pack export needs no export templates, which the host lacks.
+  schedule: "30 7 * * *"
+  inputs:
+    mode: pack
+    path: ../build/linux/game.pck
 inputs:
   properties:
     preset:

@@ -1,0 +1,70 @@
+id: d49123a3-9a16-4092-bee0-55567bb4e7a1
+name: crash-trend
+description: |-
+  Read the busiest active items of the last 24 hours and the daily
+  occurrence counts, and fail when today's count of error or critical
+  occurrences reaches the threshold.
+version: 1
+tags: {}
+inputs:
+  properties:
+    threshold:
+      type: integer
+      default: 100
+      description: |-
+        The run fails when the newest daily bucket's count of occurrences
+        at level error or critical reaches this number.
+  required: []
+jobs:
+  - name: trend
+    description: Read the top items and the daily counts, then check today
+    steps:
+      - name: top-active
+        description: The ten busiest active items of the last 24 hours
+        task:
+          type: model_method
+          modelIdOrName: crashq
+          methodName: top-active
+          inputs:
+            hours: 24
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: daily-counts
+        description: Error and critical occurrences per day, 60 days
+        task:
+          type: model_method
+          modelIdOrName: crashq
+          methodName: occurrence-counts
+          inputs:
+            bucketSize: 86400
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: under-threshold
+        description: Today's error or critical occurrences stay under threshold
+        task:
+          type: assert
+          expr: |-
+            int(data.latest("crashq",
+              "occurrence-counts").attributes.newestCount)
+            < int(inputs.threshold)
+          message: |-
+            ${{ data.latest("crashq",
+              "occurrence-counts").attributes.newestCount }}
+            error or critical occurrences in today's bucket (UTC), threshold
+            ${{ inputs.threshold }}; the top-active resource lists the
+            ${{ data.latest("crashq", "top-active").attributes.count }}
+            busiest items of the last 24 hours
+          severity: high
+        dependsOn:
+          - step: top-active
+            condition:
+              type: succeeded
+          - step: daily-counts
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+    dependsOn: []
+    weight: 0

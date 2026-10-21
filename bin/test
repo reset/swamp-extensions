@@ -41,6 +41,15 @@ if ((${#sources[@]} > 0)); then
     fi
 fi
 
+# An instance names its service's host by vault key, never by address (AGENTS.md, Rules); a
+# loopback address names no one.
+named_hosts=$(grep -nE "^  host: '[a-z]+://" models/*/*/*.yaml | grep -vE "://(127\.0\.0\.1|localhost)[:/']" || true)
+if [[ -n $named_hosts ]]; then
+    echo "bin/test: these instances name a host instead of a vault key such as <service>-host:" >&2
+    echo "$named_hosts" >&2
+    failed=1
+fi
+
 if ! command -v swamp >/dev/null 2>&1; then
     echo "bin/test: swamp is not on PATH; behaviors and workflows were not validated (AGENTS.md, Checks)" >&2
     exit 1

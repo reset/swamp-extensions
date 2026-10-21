@@ -1,6 +1,9 @@
 id: 9e374494-1b4b-4ccf-b194-21fc9b29b744
 name: host-report
 tags: {}
+trigger:
+  # Hourly on the serve host's swamp serve (serve/, docs/workloads.md).
+  schedule: "17 * * * *"
 jobs:
   - name: main
     description: Main job (edit or replace)
