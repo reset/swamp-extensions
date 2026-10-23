@@ -23,6 +23,7 @@ Year = 2026
 [Issue]
 Provider = "workq"
 Project = "SMK"
+Label = "swamp-extensions"
 Workspace = "smk"
 [Format]
 # The vendor's skills are copied verbatim from the swamp install (AGENTS.md); their Markdown is theirs to format.
