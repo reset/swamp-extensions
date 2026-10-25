@@ -1,8 +1,9 @@
 /**
  * Unit tests for the buildq behavior. Every request goes to an in-process
  * fake coordinator on 127.0.0.1 that answers with the shapes buildq's README
- * documents (its tested examples, copied here), so nothing touches a real
- * coordinator. The server tests need --allow-net=127.0.0.1 and are skipped
+ * documents (its tested examples, copied here) and signs callers in as
+ * buildq's Worker does (worker/src/identity.ts and api/builds.ts at buildq
+ * 6164eed), so nothing touches a real coordinator. The server tests need --allow-net=127.0.0.1 and are skipped
  * without it; the parsing tests run anywhere.
  *
  * @module
@@ -31,10 +32,12 @@ import {
   secondsBetween,
   summarize,
   tailOf,
+  withPipeline,
 } from "./buildq.ts";
 import source from "./buildq.ts" with { type: "text" };
 
 const TOKEN = "forge-token-for-tests";
+const API_TOKEN = "api-token-for-tests";
 const ACCESS_ID = "access-id-for-tests";
 const ACCESS_SECRET = "access-secret-for-tests";
 
@@ -193,7 +196,10 @@ const BUILD_SCHEDULED = {
   },
 };
 
-/** A build waiting at a block, after the README's description of one. */
+/**
+ * A build waiting at a block, after the README's description of one. A block
+ * is `blocked` until answered, then `unblocked` (buildq's worker/src/states.ts).
+ */
 const BUILD_BLOCKED = {
   number: 15,
   branch: "main",
@@ -226,7 +232,7 @@ const BUILD_BLOCKED = {
     {
       id: "15.2",
       name: "Publish?",
-      state: "scheduled",
+      state: "blocked",
       exit_status: null,
       signal_reason: null,
       started: null,
@@ -406,11 +412,29 @@ function serve(routes: Routes): Fake {
   };
 }
 
-/** The README's routes under one repository, answered from the fixtures. */
+/** Where the fixtures' pipeline keeps its builds on buildq's Worker. */
+const BASE = "/api/v2/organizations/acme/pipelines/game/builds";
+
+/** The pipeline buildq builds example/game under (`GET /api/v2/pipelines`). */
+const PIPELINE = {
+  organization: "acme",
+  slug: "game",
+  name: "game",
+  repository: "example/game",
+  repositories: ["example/game"],
+  host: null,
+  archived: false,
+};
+
+/** The README's routes under the pipeline, answered from the fixtures. */
 function repoRoutes(call: Call): Response | undefined {
-  const base = "/api/repos/example/game/builds";
   const { method, path } = call;
-  if (method === "GET" && path === base) {
+  if (method === "GET" && path === "/api/v2/pipelines") {
+    return Response.json(
+      call.query.get("repository") === "example/game" ? [PIPELINE] : [],
+    );
+  }
+  if (method === "GET" && path === BASE) {
     const branch = call.query.get("branch");
     const all = [BUILD_BLOCKED, BUILD_SCHEDULED, BUILD_PASSED, BUILD_FAILED];
     const builds = all
@@ -422,22 +446,22 @@ function repoRoutes(call: Call): Response | undefined {
       .slice(0, Number(call.query.get("limit") ?? 50));
     return Response.json({ builds });
   }
-  if (method === "GET" && path === `${base}/12`) {
+  if (method === "GET" && path === `${BASE}/12`) {
     return Response.json(BUILD_FAILED);
   }
-  if (method === "GET" && path === `${base}/13`) {
+  if (method === "GET" && path === `${BASE}/13`) {
     return Response.json(BUILD_PASSED);
   }
-  if (method === "GET" && path === `${base}/15`) {
+  if (method === "GET" && path === `${BASE}/15`) {
     return Response.json(BUILD_BLOCKED);
   }
-  if (method === "GET" && path === `${base}/13/artifacts`) {
+  if (method === "GET" && path === `${BASE}/13/artifacts`) {
     return Response.json(ARTIFACTS);
   }
-  if (method === "GET" && path === `${base}/12/annotations`) {
+  if (method === "GET" && path === `${BASE}/12/annotations`) {
     return Response.json(ANNOTATIONS);
   }
-  if (method === "GET" && path === `${base}/12/jobs/12.1/log`) {
+  if (method === "GET" && path === `${BASE}/12/jobs/12.1/log`) {
     const lines = Array.from(
       { length: 2000 },
       (_, i) => `line ${String(i + 1).padStart(4, "0")} of the log`,
@@ -464,13 +488,61 @@ function repoRoutes(call: Call): Response | undefined {
   return undefined;
 }
 
-/** Refuses a write without the forge token, as the coordinator does. */
-function authorized(call: Call): Response | undefined {
-  if (call.headers.get("authorization") !== `token ${TOKEN}`) {
-    return Response.json({ message: "token required" }, { status: 401 });
+/** The routes buildq's Worker takes a forge token on (`takesForgeToken`). */
+function takesForgeToken(path: string): boolean {
+  const pipeline = "^/api/v2/organizations/[^/]+/pipelines/[^/]+/builds";
+  return new RegExp(`${pipeline}/?$`).test(path) ||
+    new RegExp(`${pipeline}/\\d+/(rebuild|cancel)/?$`).test(path) ||
+    new RegExp(`${pipeline}/\\d+/jobs/[^/]+/unblock/?$`).test(path);
+}
+
+/**
+ * Who buildq's Worker takes a request from, as its identity middleware does
+ * on /api/v2/*, /api/queue and /api/agents: a forge token only on the routes
+ * that take one, a bearer API token anywhere, nothing without either. A
+ * block is answered by a person, so never with an API token.
+ */
+function signIn(call: Call): Response | undefined {
+  const guarded = call.path.startsWith("/api/v2/") ||
+    call.path === "/api/queue" || call.path === "/api/agents";
+  if (!guarded) return undefined;
+  const authorization = call.headers.get("authorization");
+  const refuse = (status: number, message: string) =>
+    Response.json({ message }, { status });
+  if (authorization === null) {
+    return refuse(
+      401,
+      "sign in, or send a management token: Authorization: Bearer <token>",
+    );
+  }
+  if (/^token\s/i.test(authorization)) {
+    if (!takesForgeToken(call.path)) {
+      return refuse(
+        401,
+        "send the management token: Authorization: Bearer <token>",
+      );
+    }
+    return authorization === `token ${TOKEN}` ? undefined : refuse(
+      403,
+      "the forge names no owner for that token: send a forge token of yours with read:user",
+    );
+  }
+  if (authorization !== `Bearer ${API_TOKEN}`) {
+    return refuse(401, "invalid token");
+  }
+  if (call.method === "PUT" && call.path.endsWith("/unblock")) {
+    return refuse(403, "a block is answered by a person, not a token");
   }
   return undefined;
 }
+
+/** buildq's Worker: its sign-in first, then the routes. */
+function worker(routes: Routes): Routes {
+  return (call) => signIn(call) ?? routes(call);
+}
+
+/** The fixtures' routes behind the Worker's sign-in. */
+const coordinator = worker(repoRoutes);
 
 function testContext(overrides: Partial<GlobalArgs> = {}): {
   context: Context;
@@ -480,8 +552,9 @@ function testContext(overrides: Partial<GlobalArgs> = {}): {
 } {
   const globalArgs: GlobalArgs = {
     host: "http://127.0.0.1:1",
-    owner: "example",
-    repo: "game",
+    organization: "acme",
+    pipeline: "game",
+    apiToken: API_TOKEN,
     ...overrides,
   };
   const result = createModelTestContext({ globalArgs: { ...globalArgs } });
@@ -545,6 +618,30 @@ Deno.test("global arguments need a host and pair owner with repo and the Access 
   );
 });
 
+Deno.test("apiToken is a sensitive global argument, kept and never empty", () => {
+  const schema = behavior.globalArguments;
+  const parsed = schema.parse({
+    host: "https://ci.example.net",
+    apiToken: API_TOKEN,
+  });
+  assertEquals(parsed.apiToken, API_TOKEN, "the API token is not dropped");
+  assertFalse(
+    schema.safeParse({ host: "https://ci.example.net", apiToken: "" }).success,
+  );
+  assertEquals(
+    schema.shape.apiToken.meta()?.sensitive,
+    true,
+    "the API token is sensitive",
+  );
+  assertFalse(
+    (schema.shape.apiToken.description ?? "").includes("need none"),
+  );
+  assertFalse(
+    (schema.shape.token.description ?? "").includes("Reads need none"),
+    "no argument says reads need no credential",
+  );
+});
+
 Deno.test("method arguments default the limits and bound the log tail", () => {
   assertEquals(behavior.methods.builds.arguments.parse({}).limit, 50);
   assertFalse(
@@ -568,11 +665,7 @@ Deno.test("method arguments default the limits and bound the log tail", () => {
   );
 });
 
-Deno.test("buildsPath prefers the pipeline route and refuses no repository", () => {
-  assertEquals(
-    buildsPath({ host: "h", owner: "example", repo: "game" }),
-    "/api/repos/example/game/builds",
-  );
+Deno.test("buildsPath is the pipeline route, never /api/repos/", () => {
   assertEquals(
     buildsPath({
       host: "h",
@@ -584,16 +677,18 @@ Deno.test("buildsPath prefers the pipeline route and refuses no repository", () 
     "/api/v2/organizations/acme/pipelines/game/builds",
   );
   assertEquals(
-    buildsPath({ host: "h", owner: "a b", repo: "c/d" }),
-    "/api/repos/a%20b/c%2Fd/builds",
+    buildsPath({ host: "h", organization: "a b", pipeline: "c/d" }),
+    "/api/v2/organizations/a%20b/pipelines/c%2Fd/builds",
   );
-  let message = "";
-  try {
-    buildsPath({ host: "h" });
-  } catch (error) {
-    message = error instanceof Error ? error.message : String(error);
+  for (const globals of [{ host: "h" }, { host: "h", owner: "o", repo: "r" }]) {
+    let message = "";
+    try {
+      buildsPath(globals);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    assertStringIncludes(message, "organization and pipeline");
   }
-  assertStringIncludes(message, "owner and repo");
 });
 
 Deno.test("normalizeBuild keeps ids, states, times and durations and drops people", () => {
@@ -640,7 +735,7 @@ Deno.test("normalizeJob keeps a block's key, prompt and field keys, never who an
 
   const answered = normalizeJob({
     ...BUILD_BLOCKED.jobs[1],
-    state: "passed",
+    state: "unblocked",
     unblocked_by: "someone@example.com",
     unblocked_at: "2026-09-24T16:30:00+00:00",
   });
@@ -681,18 +776,7 @@ Deno.test("summarize counts job states, names the first failure and times phases
   const blocked = summarize(normalizeBuild(BUILD_BLOCKED));
   assertEquals(blocked.blocked, true);
   assertEquals(blocked.finished, false);
-  assertEquals(blocked.reason, "15.2 Publish? scheduled");
-  assertEquals(blocked.jobStates, {
-    scheduled: 1,
-    assigned: 0,
-    running: 0,
-    canceling: 0,
-    passed: 1,
-    failed: 0,
-    canceled: 0,
-    skipped: 0,
-    broken: 0,
-  });
+  assertEquals(blocked.reason, "15.2 Publish? blocked");
 
   const optional = summarize(
     normalizeBuild({
@@ -707,6 +791,51 @@ Deno.test("summarize counts job states, names the first failure and times phases
   );
   assertEquals(optional.failedJobs, 0, "an optional job fails nothing");
   assertFalse("reason" in optional);
+});
+
+Deno.test("summarize counts blocked and unblocked jobs, and an answered block is no reason", () => {
+  const waiting = summarize(normalizeBuild(BUILD_BLOCKED));
+  assertEquals(waiting.jobStates, {
+    scheduled: 0,
+    assigned: 0,
+    running: 0,
+    canceling: 0,
+    passed: 1,
+    failed: 0,
+    canceled: 0,
+    skipped: 0,
+    blocked: 1,
+    unblocked: 0,
+    broken: 0,
+  });
+  const counted = Object.values(waiting.jobStates).reduce((a, b) => a + b);
+  assertEquals(counted, BUILD_BLOCKED.jobs.length, "every job is counted");
+
+  const answered = summarize(normalizeBuild({
+    ...BUILD_BLOCKED,
+    state: "passed",
+    blocked: false,
+    finished: "2026-09-24T16:31:00+00:00",
+    jobs: [
+      BUILD_BLOCKED.jobs[0],
+      {
+        ...BUILD_BLOCKED.jobs[1],
+        state: "unblocked",
+        unblocked_at: "2026-09-24T16:30:00+00:00",
+      },
+    ],
+  }));
+  assertEquals(answered.jobStates.unblocked, 1);
+  assertEquals(answered.jobStates.blocked, 0);
+  assertEquals(answered.passed, true);
+  assertFalse("reason" in answered, "an answered block holds nothing back");
+  assertEquals(
+    behavior.resources.summary.schema.shape.jobStates.parse(
+      answered.jobStates,
+    ),
+    answered.jobStates,
+    "the summary resource's schema keeps both counts",
+  );
 });
 
 Deno.test("tailOf keeps the last KiB cut to whole lines and reports the sizes", () => {
@@ -759,9 +888,9 @@ Deno.test("normalizeAgent reads tags as a list or a map and secondsBetween toler
 
 Deno.test({
   name:
-    "builds lists newest first with the filters, no token, and writes builds and newest",
+    "builds lists newest first with the filters, sends the API token, and writes builds and newest",
   ignore: !NET,
-  fn: withFake(repoRoutes, async (fake) => {
+  fn: withFake(coordinator, async (fake) => {
     const { context, getWrittenResources } = testContext({ host: fake.host });
     const result = await behavior.methods.builds.execute(
       { limit: 2, branch: "main" },
@@ -770,15 +899,10 @@ Deno.test({
     assertEquals(fake.calls.length, 1);
     const call = fake.calls[0];
     assertEquals(call.method, "GET");
-    assertEquals(call.path, "/api/repos/example/game/builds");
+    assertEquals(call.path, BASE);
     assertEquals(call.query.get("branch"), "main");
     assertEquals(call.query.get("limit"), "2");
     assertFalse(call.query.has("commit"), "undefined filters are left out");
-    assertEquals(
-      call.headers.get("authorization"),
-      null,
-      "reads send no token",
-    );
     assertEquals(call.headers.get("accept"), "application/json");
 
     const written = getWrittenResources();
@@ -794,8 +918,8 @@ Deno.test({
     assertEquals(builds.count, 2);
     assertEquals(builds.truncated, true, "a full page: more may exist");
     assertEquals(builds.filters, { branch: "main" });
-    assertEquals(builds.owner, "example");
-    assertEquals(builds.repo, "game");
+    assertEquals(builds.organization, "acme");
+    assertEquals(builds.pipeline, "game");
     assertEquals(builds.host, fake.host);
     const rows = builds.builds as Record<string, unknown>[];
     assertEquals(rows.map((b) => b.number), [15, 13]);
@@ -803,14 +927,126 @@ Deno.test({
     assertEquals(newest.number, 15);
     assertEquals(newest.state, "blocked");
     assertEquals(newest.passed, false);
-    assertEquals(newest.reason, "15.2 Publish? scheduled");
+    assertEquals(newest.reason, "15.2 Publish? blocked");
+  }),
+});
+
+Deno.test({
+  name:
+    "every read sends the API token as a bearer, which buildq's Worker needs",
+  ignore: !NET,
+  fn: withFake(coordinator, async (fake) => {
+    const reads: [string, () => Promise<unknown>][] = [];
+    const run = (name: string, fn: (context: Context) => Promise<unknown>) => {
+      const { context } = testContext({ host: fake.host });
+      reads.push([name, () => fn(context)]);
+    };
+    const m = behavior.methods;
+    run("builds", (c) => m.builds.execute({ limit: 5 }, c));
+    run("build", (c) => m.build.execute({ number: 12 }, c));
+    run("log", (c) => m.log.execute({ number: 12, tailKiB: 1 }, c));
+    run("artifacts", (c) => m.artifacts.execute({ number: 13 }, c));
+    run("annotations", (c) => m.annotations.execute({ number: 12 }, c));
+    run("queue", (c) => m.queue.execute({}, c));
+    run("agents", (c) => m.agents.execute({}, c));
+    run(
+      "org-builds",
+      (c) => m["org-builds"].execute({ organization: "acme", limit: 5 }, c),
+    );
+    for (const [name, read] of reads) {
+      const before = fake.calls.length;
+      await read();
+      const calls = fake.calls.slice(before);
+      assertEquals(calls.length, 1, `${name} makes one request`);
+      assertEquals(
+        calls[0].headers.get("authorization"),
+        `Bearer ${API_TOKEN}`,
+        `${name} sends the API token`,
+      );
+    }
+  }),
+});
+
+Deno.test({
+  name:
+    "reads refuse to run without apiToken before any request, and say what to set",
+  ignore: !NET,
+  fn: withFake(coordinator, async (fake) => {
+    for (
+      const read of [
+        (c: Context) => behavior.methods.build.execute({ number: 12 }, c),
+        (c: Context) => behavior.methods.queue.execute({}, c),
+      ]
+    ) {
+      const { context, getWrittenResources } = testContext({
+        host: fake.host,
+        apiToken: undefined,
+      });
+      await assertRejects(
+        () => read(context),
+        Error,
+        "set the global apiToken",
+      );
+      assertEquals(getWrittenResources().length, 0);
+    }
+    assertEquals(fake.calls.length, 0, "nothing was requested");
+  }),
+});
+
+Deno.test({
+  name:
+    "an instance named by owner and repo finds its pipeline, since buildq serves no /api/repos/",
+  ignore: !NET,
+  fn: withFake(coordinator, async (fake) => {
+    const { context, getWrittenResources } = testContext({
+      host: fake.host,
+      organization: undefined,
+      pipeline: undefined,
+      owner: "example",
+      repo: "game",
+    });
+    await behavior.methods.build.execute({ number: 12 }, context);
+    assertEquals(
+      fake.calls.map((c) => `${c.method} ${c.path}?${c.query}`),
+      [
+        "GET /api/v2/pipelines?repository=example%2Fgame",
+        `GET ${BASE}/12?`,
+      ],
+    );
+    assert(
+      fake.calls.every((c) => !c.path.startsWith("/api/repos/")),
+      "the route buildq dropped is never asked",
+    );
+    assertEquals(getWrittenResources()[0].data.state, "failed");
+
+    const resolved = await withPipeline({
+      host: fake.host,
+      owner: "example",
+      repo: "game",
+      apiToken: API_TOKEN,
+    });
+    assertEquals([resolved.organization, resolved.pipeline], ["acme", "game"]);
+
+    const unknown = testContext({
+      host: fake.host,
+      organization: undefined,
+      pipeline: undefined,
+      owner: "example",
+      repo: "elsewhere",
+    });
+    await assertRejects(
+      () => behavior.methods.build.execute({ number: 12 }, unknown.context),
+      Error,
+      "names no pipeline for example/elsewhere",
+    );
+    assertEquals(unknown.getWrittenResources().length, 0);
   }),
 });
 
 Deno.test({
   name: "builds with no match writes an empty list and no newest",
   ignore: !NET,
-  fn: withFake(repoRoutes, async (fake) => {
+  fn: withFake(coordinator, async (fake) => {
     const { context, getWrittenResources } = testContext({ host: fake.host });
     await behavior.methods.builds.execute(
       { limit: 50, branch: "nowhere", commit: "ffff" },
@@ -829,7 +1065,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "build reads one build, sends the Access headers, and writes build and summary",
+    "build reads one build, sends the Access headers beside the API token, and writes build and summary",
   ignore: !NET,
   fn: withFake(
     (call) => {
@@ -842,7 +1078,7 @@ Deno.test({
       if (call.headers.get("cf-access-client-secret") !== ACCESS_SECRET) {
         return new Response("forbidden", { status: 403 });
       }
-      return repoRoutes(call);
+      return coordinator(call);
     },
     async (fake) => {
       const { context, getWrittenResources, getLogs } = testContext({
@@ -851,7 +1087,7 @@ Deno.test({
         accessClientSecret: ACCESS_SECRET,
       });
       await behavior.methods.build.execute({ number: 12 }, context);
-      assertEquals(fake.calls[0].path, "/api/repos/example/game/builds/12");
+      assertEquals(fake.calls[0].path, `${BASE}/12`);
       const written = getWrittenResources();
       assertEquals(
         written.map((w) => [w.specName, w.name]),
@@ -866,9 +1102,9 @@ Deno.test({
       const jobs = written[1].data.jobs as Record<string, unknown>[];
       assertEquals(jobs[0].phaseSeconds, { fetch: 8, checkout: 229 });
       for (const log of getLogs()) {
-        assertFalse(
-          JSON.stringify([log.message, log.args]).includes(ACCESS_SECRET),
-        );
+        const text = JSON.stringify([log.message, log.args]);
+        assertFalse(text.includes(ACCESS_SECRET));
+        assertFalse(text.includes(API_TOKEN));
       }
     },
   ),
@@ -903,10 +1139,37 @@ Deno.test({
 
 Deno.test({
   name:
+    "a coordinator that moved with a 308 is named as the host to set, and not followed",
+  ignore: !NET,
+  fn: withFake(
+    (call) =>
+      new Response("", {
+        status: 308,
+        headers: { Location: `https://ci.example.net${call.path}` },
+      }),
+    async (fake) => {
+      const { context, getWrittenResources } = testContext({ host: fake.host });
+      const error = await assertRejects(
+        () => behavior.methods.build.execute({ number: 12 }, context),
+        BuildqError,
+      );
+      assertEquals(error.status, 308);
+      assertStringIncludes(
+        error.message,
+        "buildq answers at https://ci.example.net now: set the global host to it",
+      );
+      assertEquals(fake.calls.length, 1);
+      assertEquals(getWrittenResources().length, 0);
+    },
+  ),
+});
+
+Deno.test({
+  name:
     "errors carry the status, the message and a hint, and leave nothing written",
   ignore: !NET,
   fn: withFake(
-    (call) => {
+    worker((call) => {
       if (call.path.endsWith("/builds/404")) {
         return Response.json({ message: "no build 404" }, { status: 404 });
       }
@@ -917,11 +1180,12 @@ Deno.test({
         return new Response("<html>login</html>", { status: 200 });
       }
       return undefined;
-    },
+    }),
     async (fake) => {
-      const run = (number: number) => {
+      const run = (number: number, apiToken = API_TOKEN) => {
         const { context, getWrittenResources } = testContext({
           host: fake.host,
+          apiToken,
         });
         return assertRejects(
           () => behavior.methods.build.execute({ number }, context),
@@ -935,7 +1199,7 @@ Deno.test({
       assertEquals(missing.status, 404);
       assertStringIncludes(
         missing.message,
-        "GET /api/repos/example/game/builds/404: 404 no build 404",
+        `GET ${BASE}/404: 404 no build 404`,
       );
       assertStringIncludes(missing.message, "no such build");
       const broken = await run(500);
@@ -943,6 +1207,9 @@ Deno.test({
       assertStringIncludes(broken.message, "500 boom");
       const html = await run(200);
       assertStringIncludes(html.message, "not JSON");
+      const refused = await run(12, "not-the-api-token");
+      assertEquals(refused.status, 401);
+      assertStringIncludes(refused.message, "reads send apiToken");
     },
   ),
 });
@@ -953,20 +1220,16 @@ Deno.test({
   ignore: !NET,
   fn: withFake(
     (call) =>
-      call.path === "/ci/api/v2/organizations/acme/pipelines/game/builds/13"
-        ? Response.json(BUILD_PASSED)
-        : undefined,
+      call.path === `/ci${BASE}/13` ? Response.json(BUILD_PASSED) : undefined,
     async (fake) => {
       const { context, getWrittenResources } = testContext({
         host: `${fake.host}/ci/`,
-        organization: "acme",
-        pipeline: "game",
+        owner: "o",
+        repo: "r",
       });
       await behavior.methods.build.execute({ number: 13 }, context);
-      assertEquals(
-        fake.calls[0].path,
-        "/ci/api/v2/organizations/acme/pipelines/game/builds/13",
-      );
+      assertEquals(fake.calls.length, 1, "no lookup when the pipeline is set");
+      assertEquals(fake.calls[0].path, `/ci${BASE}/13`);
       assertEquals(getWrittenResources()[0].data.host, `${fake.host}/ci/`);
     },
   ),
@@ -975,7 +1238,7 @@ Deno.test({
 Deno.test({
   name: "log keeps the last KiB of a job's log as a text file",
   ignore: !NET,
-  fn: withFake(repoRoutes, async (fake) => {
+  fn: withFake(coordinator, async (fake) => {
     const { context, getWrittenFiles, getWrittenResources } = testContext({
       host: fake.host,
     });
@@ -983,10 +1246,7 @@ Deno.test({
       { number: 12, tailKiB: 1 },
       context,
     );
-    assertEquals(
-      fake.calls[0].path,
-      "/api/repos/example/game/builds/12/jobs/12.1/log",
-    );
+    assertEquals(fake.calls[0].path, `${BASE}/12/jobs/12.1/log`);
     assertEquals(fake.calls[0].headers.get("accept"), "text/plain");
     const files = getWrittenFiles();
     assertEquals(files.length, 1);
@@ -1011,7 +1271,7 @@ Deno.test({
 Deno.test({
   name: "artifacts and annotations list a build's kept files and notes",
   ignore: !NET,
-  fn: withFake(repoRoutes, async (fake) => {
+  fn: withFake(coordinator, async (fake) => {
     const files = testContext({ host: fake.host });
     await behavior.methods.artifacts.execute({ number: 13 }, files.context);
     const artifacts = files.getWrittenResources()[0];
@@ -1042,7 +1302,7 @@ Deno.test({
 Deno.test({
   name: "queue and agents read the coordinator-wide state",
   ignore: !NET,
-  fn: withFake(repoRoutes, async (fake) => {
+  fn: withFake(coordinator, async (fake) => {
     const queue = testContext({ host: fake.host });
     await behavior.methods.queue.execute({}, queue.context);
     const q = queue.getWrittenResources()[0];
@@ -1071,7 +1331,7 @@ Deno.test({
   name:
     "org-builds lists an organization's builds under /api/v2 and needs an organization",
   ignore: !NET,
-  fn: withFake(repoRoutes, async (fake) => {
+  fn: withFake(coordinator, async (fake) => {
     const { context, getWrittenResources } = testContext({ host: fake.host });
     await behavior.methods["org-builds"].execute(
       { organization: "acme", limit: 10 },
@@ -1087,7 +1347,7 @@ Deno.test({
     assertEquals(rows[0].pipeline, "game");
     assertEquals(rows[0].owner, "example");
 
-    const bare = testContext({ host: fake.host });
+    const bare = testContext({ host: fake.host, organization: undefined });
     await assertRejects(
       () => behavior.methods["org-builds"].execute({ limit: 10 }, bare.context),
       Error,
@@ -1097,192 +1357,265 @@ Deno.test({
   }),
 });
 
+/** The fixtures' routes with buildq's write answers, behind the Worker's sign-in. */
+const writes = worker((call) => {
+  if (call.method === "POST" && call.path === `${BASE}/12/rebuild`) {
+    return Response.json(BUILD_PASSED, { status: 202 });
+  }
+  if (call.method === "POST" && call.path === `${BASE}/13/cancel`) {
+    return Response.json(BUILD_PASSED, { status: 409 });
+  }
+  if (call.method === "POST" && call.path === `${BASE}/15/cancel`) {
+    return Response.json({ ...BUILD_BLOCKED, state: "canceling" }, {
+      status: 202,
+    });
+  }
+  if (call.method === "PUT" && call.path === `${BASE}/15/jobs/15.2/unblock`) {
+    const body = JSON.parse(call.body) as { fields: Record<string, string> };
+    if (body.fields.branch === "nope") {
+      return Response.json(
+        { message: "branch: not one of beta, default" },
+        { status: 422 },
+      );
+    }
+    // buildq answers an unblock with the job alone (api/builds.ts, jobToApi).
+    return Response.json({
+      ...BUILD_BLOCKED.jobs[1],
+      state: "unblocked",
+      unblocked_by: "someone@example.com",
+      unblocked_at: "2026-09-24T16:30:00+00:00",
+    });
+  }
+  return repoRoutes(call);
+});
+
+/** The write answers, with every read of one build failing as a 500. */
+const writesThenUnreadable = worker((call) =>
+  call.method === "GET" && /\/builds\/\d+$/.test(call.path)
+    ? new Response("boom", { status: 500 })
+    : writes(call)
+);
+
 Deno.test({
-  name: "rebuild posts with the token, then reads and writes the new build",
+  name:
+    "rebuild posts with the forge token alone and writes the new build from the answer",
   ignore: !NET,
-  fn: withFake(
-    (call) => {
-      if (call.method === "POST" && call.path.endsWith("/builds/12/rebuild")) {
-        return authorized(call) ?? Response.json(BUILD_PASSED, { status: 202 });
-      }
-      return repoRoutes(call);
-    },
-    async (fake) => {
-      const { context, getWrittenResources, getLogs } = testContext({
-        host: fake.host,
-        token: TOKEN,
-      });
-      await behavior.methods.rebuild.execute({ number: 12 }, context);
-      assertEquals(
-        fake.calls.map((c) => `${c.method} ${c.path}`),
-        [
-          "POST /api/repos/example/game/builds/12/rebuild",
-          "GET /api/repos/example/game/builds/13",
-        ],
-      );
-      assertEquals(
-        fake.calls[0].headers.get("authorization"),
-        `token ${TOKEN}`,
-      );
-      assertEquals(
-        fake.calls[1].headers.get("authorization"),
-        null,
-        "the re-read is a read",
-      );
-      const written = getWrittenResources();
-      assertEquals(written.map((w) => w.name), ["build-13", "summary-13"]);
-      assertEquals(written[0].data.rebuiltFrom, 12);
-      assertEquals(written[1].data.passed, true);
-      for (const log of getLogs()) {
-        assertFalse(JSON.stringify([log.message, log.args]).includes(TOKEN));
-      }
-    },
-  ),
+  fn: withFake(writes, async (fake) => {
+    const { context, getWrittenResources, getLogs } = testContext({
+      host: fake.host,
+      token: TOKEN,
+    });
+    await behavior.methods.rebuild.execute({ number: 12 }, context);
+    assertEquals(
+      fake.calls.map((c) => `${c.method} ${c.path}`),
+      [`POST ${BASE}/12/rebuild`],
+      "the answer is the new build: nothing is read back",
+    );
+    assertEquals(
+      fake.calls[0].headers.get("authorization"),
+      `token ${TOKEN}`,
+    );
+    const written = getWrittenResources();
+    assertEquals(written.map((w) => w.name), ["build-13", "summary-13"]);
+    assertEquals(written[0].data.rebuiltFrom, 12);
+    assertEquals(written[1].data.passed, true);
+    for (const log of getLogs()) {
+      const text = JSON.stringify([log.message, log.args]);
+      assertFalse(text.includes(TOKEN));
+      assertFalse(text.includes(API_TOKEN));
+    }
+  }),
 });
 
 Deno.test({
   name:
-    "writes refuse to run without a token and write nothing when the API refuses",
+    "a rebuild or cancel that buildq made is written even when the build cannot be read",
   ignore: !NET,
-  fn: withFake(
-    (call) =>
-      call.method === "POST"
-        ? authorized(call) ?? Response.json({}, { status: 202 })
-        : undefined,
-    async (fake) => {
-      const bare = testContext({ host: fake.host });
-      await assertRejects(
-        () => behavior.methods.cancel.execute({ number: 12 }, bare.context),
-        Error,
-        "needs a forge token",
-      );
-      assertEquals(fake.calls.length, 0, "nothing was requested");
+  fn: withFake(writesThenUnreadable, async (fake) => {
+    const rebuilt = testContext({ host: fake.host, token: TOKEN });
+    await behavior.methods.rebuild.execute({ number: 12 }, rebuilt.context);
+    assertEquals(
+      rebuilt.getWrittenResources().map((w) => w.name),
+      ["build-13", "summary-13"],
+    );
 
-      const wrong = testContext({ host: fake.host, token: "not-the-token" });
-      const error = await assertRejects(
-        () => behavior.methods.rebuild.execute({ number: 12 }, wrong.context),
-        BuildqError,
-      );
-      assertEquals(error.status, 401);
-      assertStringIncludes(
-        error.message,
-        "POST /api/repos/example/game/builds/12/rebuild: 401",
-      );
-      assertStringIncludes(error.message, "token required");
-      assertEquals(wrong.getWrittenResources().length, 0);
-    },
-  ),
-});
-
-Deno.test({
-  name: "cancel accepts a build that already ended and re-reads it",
-  ignore: !NET,
-  fn: withFake(
-    (call) => {
-      if (call.method === "POST" && call.path.endsWith("/builds/13/cancel")) {
-        return authorized(call) ?? Response.json(BUILD_PASSED, { status: 409 });
-      }
-      if (call.method === "POST" && call.path.endsWith("/builds/15/cancel")) {
-        return authorized(call) ??
-          Response.json({ ...BUILD_BLOCKED, state: "canceling" }, {
-            status: 202,
-          });
-      }
-      return repoRoutes(call);
-    },
-    async (fake) => {
-      const ended = testContext({ host: fake.host, token: TOKEN });
-      await behavior.methods.cancel.execute({ number: 13 }, ended.context);
-      assertEquals(ended.getWrittenResources()[1].data.state, "passed");
-      const warnings = ended.getLogs().filter((l) => l.level === "warning");
-      assertEquals(warnings.length, 1);
-      assertStringIncludes(warnings[0].message, "already ended");
-
-      const live = testContext({ host: fake.host, token: TOKEN });
-      await behavior.methods.cancel.execute({ number: 15 }, live.context);
-      assertEquals(
-        fake.calls.slice(2).map((c) => `${c.method} ${c.path}`),
-        [
-          "POST /api/repos/example/game/builds/15/cancel",
-          "GET /api/repos/example/game/builds/15",
-        ],
-      );
-      assertEquals(
-        live.getLogs().filter((l) => l.level === "warning").length,
-        0,
-      );
-    },
-  ),
+    const cancelled = testContext({ host: fake.host, token: TOKEN });
+    await behavior.methods.cancel.execute({ number: 15 }, cancelled.context);
+    const written = cancelled.getWrittenResources();
+    assertEquals(written.map((w) => w.name), ["build-15", "summary-15"]);
+    assertEquals(written[0].data.state, "canceling");
+  }),
 });
 
 Deno.test({
   name:
-    "unblock puts the fields as JSON, then re-reads the build; a refusal names the field",
+    "writes refuse to run without a forge token and write nothing when buildq refuses",
   ignore: !NET,
-  fn: withFake(
-    (call) => {
-      if (call.method === "PUT" && call.path.endsWith("/jobs/15.2/unblock")) {
-        const refused = authorized(call);
-        if (refused) return refused;
-        const body = JSON.parse(call.body) as {
-          fields: Record<string, string>;
-        };
-        if (body.fields.branch === "nope") {
-          return Response.json(
-            { message: "branch: not one of beta, default" },
-            { status: 422 },
-          );
-        }
-        return Response.json({
-          ...BUILD_BLOCKED.jobs[1],
-          state: "passed",
-          unblocked_by: "someone@example.com",
-          unblocked_at: "2026-09-24T16:30:00+00:00",
-        });
-      }
-      return repoRoutes(call);
-    },
-    async (fake) => {
-      const { context, getWrittenResources } = testContext({
-        host: fake.host,
-        token: TOKEN,
-      });
-      await behavior.methods.unblock.execute(
-        {
-          number: 15,
-          job: "15.2",
-          fields: { branch: "beta", notes: "hotfix" },
-        },
-        context,
-      );
-      assertEquals(fake.calls[0].method, "PUT");
-      assertEquals(
-        fake.calls[0].headers.get("content-type"),
-        "application/json",
-      );
-      assertEquals(JSON.parse(fake.calls[0].body), {
+  fn: withFake(writes, async (fake) => {
+    const bare = testContext({ host: fake.host });
+    await assertRejects(
+      () => behavior.methods.cancel.execute({ number: 12 }, bare.context),
+      Error,
+      "needs a forge token",
+    );
+    const named = testContext({
+      host: fake.host,
+      organization: undefined,
+      pipeline: undefined,
+      owner: "example",
+      repo: "game",
+    });
+    await assertRejects(
+      () => behavior.methods.rebuild.execute({ number: 12 }, named.context),
+      Error,
+      "needs a forge token",
+    );
+    assertEquals(fake.calls.length, 0, "nothing was requested");
+
+    const wrong = testContext({ host: fake.host, token: "not-the-token" });
+    const error = await assertRejects(
+      () => behavior.methods.rebuild.execute({ number: 12 }, wrong.context),
+      BuildqError,
+    );
+    assertEquals(error.status, 403);
+    assertStringIncludes(error.message, `POST ${BASE}/12/rebuild: 403`);
+    assertStringIncludes(error.message, "the forge names no owner");
+    assertEquals(wrong.getWrittenResources().length, 0);
+  }),
+});
+
+Deno.test({
+  name:
+    "cancel takes a build that already ended as done and writes it from the answer",
+  ignore: !NET,
+  fn: withFake(writes, async (fake) => {
+    const ended = testContext({ host: fake.host, token: TOKEN });
+    await behavior.methods.cancel.execute({ number: 13 }, ended.context);
+    assertEquals(ended.getWrittenResources()[1].data.state, "passed");
+    const warnings = ended.getLogs().filter((l) => l.level === "warning");
+    assertEquals(warnings.length, 1);
+    assertStringIncludes(warnings[0].message, "already ended");
+
+    const live = testContext({ host: fake.host, token: TOKEN });
+    await behavior.methods.cancel.execute({ number: 15 }, live.context);
+    assertEquals(
+      fake.calls.map((c) => `${c.method} ${c.path}`),
+      [`POST ${BASE}/13/cancel`, `POST ${BASE}/15/cancel`],
+    );
+    assert(
+      fake.calls.every((c) =>
+        c.headers.get("authorization") === `token ${TOKEN}`
+      ),
+    );
+    assertEquals(live.getWrittenResources()[0].data.state, "canceling");
+    assertEquals(
+      live.getLogs().filter((l) => l.level === "warning").length,
+      0,
+    );
+  }),
+});
+
+Deno.test({
+  name:
+    "unblock puts the fields with the forge token, then reads the build back with the API token; a refusal names the field",
+  ignore: !NET,
+  fn: withFake(writes, async (fake) => {
+    const { context, getWrittenResources } = testContext({
+      host: fake.host,
+      token: TOKEN,
+    });
+    await behavior.methods.unblock.execute(
+      {
+        number: 15,
+        job: "15.2",
         fields: { branch: "beta", notes: "hotfix" },
-      });
-      assertEquals(fake.calls[1].path, "/api/repos/example/game/builds/15");
-      assertEquals(getWrittenResources().map((w) => w.name), [
-        "build-15",
-        "summary-15",
-      ]);
+      },
+      context,
+    );
+    assertEquals(fake.calls[0].method, "PUT");
+    assertEquals(fake.calls[0].headers.get("authorization"), `token ${TOKEN}`);
+    assertEquals(
+      fake.calls[0].headers.get("content-type"),
+      "application/json",
+    );
+    assertEquals(JSON.parse(fake.calls[0].body), {
+      fields: { branch: "beta", notes: "hotfix" },
+    });
+    assertEquals(
+      `${fake.calls[1].method} ${fake.calls[1].path}`,
+      `GET ${BASE}/15`,
+    );
+    assertEquals(
+      fake.calls[1].headers.get("authorization"),
+      `Bearer ${API_TOKEN}`,
+      "the read back is a read: buildq takes no forge token on it",
+    );
+    assertEquals(getWrittenResources().map((w) => w.name), [
+      "build-15",
+      "summary-15",
+    ]);
 
-      const refused = testContext({ host: fake.host, token: TOKEN });
-      const error = await assertRejects(
-        () =>
-          behavior.methods.unblock.execute(
-            { number: 15, job: "15.2", fields: { branch: "nope" } },
-            refused.context,
-          ),
-        BuildqError,
-      );
-      assertEquals(error.status, 422);
-      assertStringIncludes(error.message, "branch: not one of beta, default");
-      assertEquals(refused.getWrittenResources().length, 0);
-    },
-  ),
+    const refused = testContext({ host: fake.host, token: TOKEN });
+    const error = await assertRejects(
+      () =>
+        behavior.methods.unblock.execute(
+          { number: 15, job: "15.2", fields: { branch: "nope" } },
+          refused.context,
+        ),
+      BuildqError,
+    );
+    assertEquals(error.status, 422);
+    assertStringIncludes(error.message, "branch: not one of beta, default");
+    assertEquals(refused.getWrittenResources().length, 0);
+  }),
+});
+
+Deno.test({
+  name:
+    "an unblock buildq took is reported as done when the build cannot be read back",
+  ignore: !NET,
+  fn: withFake(writesThenUnreadable, async (fake) => {
+    const { context, getWrittenResources, getLogs } = testContext({
+      host: fake.host,
+      token: TOKEN,
+    });
+    const result = await behavior.methods.unblock.execute(
+      { number: 15, job: "15.2", fields: { branch: "beta" } },
+      context,
+    );
+    assertEquals(
+      fake.calls.map((c) => `${c.method} ${c.path}`),
+      [`PUT ${BASE}/15/jobs/15.2/unblock`, `GET ${BASE}/15`],
+    );
+    assertEquals(result.dataHandles.length, 0);
+    assertEquals(getWrittenResources().length, 0);
+    const warnings = getLogs().filter((l) => l.level === "warning");
+    assertEquals(warnings.length, 1);
+    assertStringIncludes(warnings[0].message, "Answered block");
+    assertStringIncludes(warnings[0].message, "The answer stands");
+  }),
+});
+
+Deno.test({
+  name: "unblock refuses to run without apiToken, which it reads back with",
+  ignore: !NET,
+  fn: withFake(writes, async (fake) => {
+    const { context } = testContext({
+      host: fake.host,
+      token: TOKEN,
+      apiToken: undefined,
+    });
+    await assertRejects(
+      () =>
+        behavior.methods.unblock.execute(
+          { number: 15, job: "15.2", fields: {} },
+          context,
+        ),
+      Error,
+      "set the global apiToken",
+    );
+    assertEquals(fake.calls.length, 0, "the block was not answered");
+  }),
 });
 
 Deno.test("every argument's description is written where the registry reads it", () => {

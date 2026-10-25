@@ -38,19 +38,27 @@ const JOB_STATES = [
   "failed",
   "canceled",
   "skipped",
+  "blocked",
+  "unblocked",
   "broken",
 ] as const;
+
+/** Job states that fail nothing and hold nothing open: an answered block. */
+const SETTLED_STATES = ["passed", "unblocked"];
 
 /** The states a build has ended in. */
 const FINISHED_STATES = ["passed", "failed", "canceled", "skipped"];
 
 /** What a status code means when the answer carries no message of its own. */
 const STATUS_HINTS: Record<number, string> = {
-  401: "no forge token was sent, or it was not accepted",
-  403: "the token's owner cannot push to the repository, the token lacks " +
-    "read:user, or the host's login refused the request (set " +
-    "accessClientId and accessClientSecret behind Cloudflare Access)",
-  404: "no such build, job, pipeline or repository",
+  401: "no credential was sent, or buildq did not take it: reads send " +
+    "apiToken, rebuild, cancel and unblock the forge token",
+  403: "the credential may not do this: a read-scoped apiToken reads only " +
+    "builds and one build, a block is answered only with a forge token, " +
+    "and the forge token needs read:user and an owner who is a buildq user " +
+    "and can push to the repository",
+  404: "no such build, job, pipeline or organization, or apiToken may not " +
+    "see it",
   409: "the build has ended, or the block is not waiting for an answer",
   422: "the request names something the build or the forge does not have",
 };
@@ -71,6 +79,12 @@ export interface GlobalArgs {
   organization?: string;
   /** Pipeline slug, with `organization`. */
   pipeline?: string;
+  /**
+   * buildq API token sent as `Authorization: Bearer` on every request but
+   * rebuild, cancel and unblock: a management token or a personal token.
+   * Sensitive.
+   */
+  apiToken?: string;
   /** Forge token sent as `Authorization: token` on writes. Sensitive. */
   token?: string;
   /** Cloudflare Access service token id, with `accessClientSecret`. */
@@ -440,7 +454,10 @@ export interface RequestOptions {
   query?: Record<string, string | number | undefined>;
   /** JSON body for POST and PUT. */
   body?: Record<string, unknown>;
-  /** Whether to send the forge token. Writes need it. */
+  /**
+   * Whether to send the forge token, which only rebuild, cancel and unblock
+   * take, instead of the API token every other request sends.
+   */
   authorize?: boolean;
   /** Whether to return the body as text rather than parsed JSON. */
   text?: boolean;
@@ -497,18 +514,25 @@ const GlobalArgsSchema = z.object({
     .min(1)
     .optional()
     .describe("Pipeline slug, with organization."),
+  apiToken: z.string()
+    .min(1)
+    .optional()
+    .meta({ sensitive: true })
+    .describe(
+      "buildq API token, sent as Authorization: Bearer on every request but rebuild, cancel and unblock, and needed by every method: a management token of the organization or a personal token (pt_). A read-scoped management token reads only builds, one build and the pipeline lookup, not logs, artifacts, annotations, the queue or the agents.",
+    ),
   token: z.string()
     .min(1)
     .optional()
     .meta({ sensitive: true })
     .describe(
-      "Forge token sent as Authorization: token on rebuild, cancel and unblock. Its owner must be able to push to the repository. Reads need none.",
+      "Forge token sent as Authorization: token on rebuild, cancel and unblock, the only requests buildq takes it on. It needs read:user, and its owner must be a buildq user who can push to the repository.",
     ),
   accessClientId: z.string()
     .min(1)
     .optional()
     .describe(
-      "Cloudflare Access service token id, sent as CF-Access-Client-Id when the coordinator sits behind Access.",
+      "Cloudflare Access service token id, sent as CF-Access-Client-Id on every request, for a coordinator Cloudflare Access still stands in front of. buildq does not take it as a credential: reads still need apiToken.",
     ),
   accessClientSecret: z.string()
     .min(1)
@@ -667,6 +691,8 @@ const JobStateCountsSchema = z.object({
   failed: z.number().int(),
   canceled: z.number().int(),
   skipped: z.number().int(),
+  blocked: z.number().int(),
+  unblocked: z.number().int(),
   broken: z.number().int(),
 }) satisfies z.ZodType<JobStateCounts>;
 
@@ -994,6 +1020,8 @@ export function summarize(build: Build): BuildSummary {
     failed: 0,
     canceled: 0,
     skipped: 0,
+    blocked: 0,
+    unblocked: 0,
     broken: 0,
   };
   let failedJobs = 0;
@@ -1002,7 +1030,10 @@ export function summarize(build: Build): BuildSummary {
   for (const job of build.jobs) {
     if (job.state in jobStates) jobStates[job.state as keyof JobStateCounts]++;
     if (!job.optional && job.state === "failed") failedJobs++;
-    if (!job.optional && job.state !== "passed" && reason === undefined) {
+    if (
+      !job.optional && !SETTLED_STATES.includes(job.state) &&
+      reason === undefined
+    ) {
       const detail = job.summary ??
         job.signalReason ??
         (job.exitStatus === undefined ? undefined : `exit ${job.exitStatus}`);
@@ -1191,7 +1222,11 @@ export function tailOf(
 // Transport
 // ---------------------------------------------------------------------------
 
-/** The path under which a repository's builds live, by the globals given. */
+/**
+ * The path under which a pipeline's builds live. buildq serves a
+ * repository's builds only under its pipeline: `/api/repos/` is gone, so an
+ * instance named by owner and repo goes through `withPipeline` first.
+ */
 export function buildsPath(globalArgs: GlobalArgs): string {
   if (
     globalArgs.organization !== undefined && globalArgs.pipeline !== undefined
@@ -1201,14 +1236,49 @@ export function buildsPath(globalArgs: GlobalArgs): string {
     }` +
       `/pipelines/${encodeURIComponent(globalArgs.pipeline)}/builds`;
   }
-  if (globalArgs.owner !== undefined && globalArgs.repo !== undefined) {
-    return `/api/repos/${encodeURIComponent(globalArgs.owner)}` +
-      `/${encodeURIComponent(globalArgs.repo)}/builds`;
-  }
   throw new Error(
-    "set the global owner and repo, or organization and pipeline, to read " +
-      "a repository's builds",
+    "set the global organization and pipeline, or owner and repo to look " +
+      "the pipeline up, to read a repository's builds",
   );
+}
+
+/**
+ * The globals with `organization` and `pipeline` set: as given, or, for an
+ * instance named by owner and repo, the pipeline buildq builds that
+ * repository under (`GET /api/v2/pipelines?repository=<owner>/<repo>`,
+ * which a read-scoped API token may call too).
+ */
+export async function withPipeline(
+  globalArgs: GlobalArgs,
+  signal?: AbortSignal,
+): Promise<GlobalArgs> {
+  if (
+    (globalArgs.organization !== undefined &&
+      globalArgs.pipeline !== undefined) ||
+    globalArgs.owner === undefined ||
+    globalArgs.repo === undefined
+  ) {
+    return globalArgs;
+  }
+  const repository = `${globalArgs.owner}/${globalArgs.repo}`;
+  const answer = await request(
+    globalArgs,
+    { method: "GET", path: "/api/v2/pipelines", query: { repository } },
+    signal,
+  );
+  const found = rowsOf(answer.body, "pipelines")[0];
+  const organization = isRecord(found)
+    ? asString(found.organization)
+    : undefined;
+  const pipeline = isRecord(found) ? asString(found.slug) : undefined;
+  if (organization === undefined || pipeline === undefined) {
+    throw new Error(
+      `buildq names no pipeline for ${repository} that apiToken may see: ` +
+        "set the global organization and pipeline, or use a token of the " +
+        "organization that builds it",
+    );
+  }
+  return { ...globalArgs, organization, pipeline };
 }
 
 /** The scope fields a repository resource records. */
@@ -1223,8 +1293,11 @@ function scopeOf(globalArgs: GlobalArgs): Record<string, string | undefined> {
 
 /**
  * Sends one request and returns its status and body. The Access headers go
- * on every request when set; the forge token only when `authorize` is set.
- * Redirects are not followed: a login page is reported, not read.
+ * on every request when set. Each request carries one credential: the forge
+ * token when `authorize` is set (rebuild, cancel and unblock, the only
+ * routes buildq takes it on), the API token as a bearer otherwise. Either
+ * missing throws before anything is sent. Redirects are not followed: a
+ * login page is reported, not read, and a coordinator that moved is named.
  *
  * Throws a BuildqError for a 3xx, 4xx or 5xx status not in `accept`, and for
  * a JSON answer that is not JSON.
@@ -1255,6 +1328,14 @@ export async function request(
       );
     }
     headers.Authorization = `token ${globalArgs.token}`;
+  } else {
+    if (globalArgs.apiToken === undefined) {
+      throw new Error(
+        `${options.method} ${options.path} needs a buildq API token: set the ` +
+          "global apiToken",
+      );
+    }
+    headers.Authorization = `Bearer ${globalArgs.apiToken}`;
   }
   const body = options.body === undefined
     ? undefined
@@ -1273,6 +1354,14 @@ export async function request(
 
   if (response.status >= 300 && response.status < 400) {
     const location = response.headers.get("Location") ?? "elsewhere";
+    const moved = movedTo(response.status, location, url);
+    if (moved !== undefined) {
+      throw new BuildqError(
+        `${label}: ${response.status} moved to ${location} (buildq answers ` +
+          `at ${moved} now: set the global host to it)`,
+        response.status,
+      );
+    }
     throw new BuildqError(
       `${label}: ${response.status} redirected to ${location} (the host is ` +
         "behind a login: set accessClientId and accessClientSecret for " +
@@ -1309,6 +1398,26 @@ export async function request(
     throw new BuildqError(`${label}: answer was not JSON`, response.status);
   }
   return { status: response.status, body: parsed };
+}
+
+/**
+ * The origin a permanent redirect (301, 308) moved the coordinator to, when
+ * it is another origin than the one asked: buildq's old hostname answers
+ * every request with a 308 to its new one. Undefined for anything else.
+ */
+function movedTo(
+  status: number,
+  location: string,
+  asked: URL,
+): string | undefined {
+  if (status !== 301 && status !== 308) return undefined;
+  let target: URL;
+  try {
+    target = new URL(location, asked);
+  } catch {
+    return undefined;
+  }
+  return target.origin === asked.origin ? undefined : target.origin;
 }
 
 function detailOf(
@@ -1359,20 +1468,25 @@ async function writeBuild(
   return [buildHandle, summaryHandle];
 }
 
-/** Reads a build after a write to it, writes it, and logs its state. */
-async function reread(
+/** Throws before any request when a write has no forge token to send. */
+function needForgeToken(globalArgs: GlobalArgs, method: string): void {
+  if (globalArgs.token === undefined) {
+    throw new Error(`${method} needs a forge token: set the global token`);
+  }
+}
+
+/** Writes the build a write answered with, and logs its state. */
+async function writeAnswered(
   context: Context,
-  number: number,
+  build: Build,
   verb: string,
 ): Promise<MethodResult> {
-  const { globalArgs, signal, logger } = context;
-  const build = await fetchBuild(globalArgs, number, signal);
   const dataHandles = await writeBuild(
     context,
     build,
     new Date().toISOString(),
   );
-  logger.info("{verb} build #{number}: it is now {state}", {
+  context.logger.info("{verb} build #{number}: it is now {state}", {
     verb,
     number: build.number,
     state: build.state,
@@ -1401,9 +1515,10 @@ async function listBuilds(
 
 /**
  * The behavior definition Swamp registers. Global arguments are `host`, the
- * repository (`owner` and `repo`, or `organization` and `pipeline`), an
- * optional `token` (sensitive) for writes, and an optional Cloudflare Access
- * service token; see the README for each method, the resource it writes and
+ * repository (`organization` and `pipeline`, or `owner` and `repo` to look
+ * the pipeline up), `apiToken` (sensitive) for every read, an optional
+ * `token` (sensitive) for writes, and an optional Cloudflare Access service
+ * token; see the README for each method, the resource it writes and
  * the instance name it writes it under.
  */
 export const behavior = {
@@ -1493,7 +1608,8 @@ export const behavior = {
         context: Context,
       ): Promise<MethodResult> => {
         const { globalArgs, signal, logger } = context;
-        const path = buildsPath(globalArgs);
+        const scoped = await withPipeline(globalArgs, signal);
+        const path = buildsPath(scoped);
         const filters = compact({ branch: args.branch, commit: args.commit });
         logger.info(
           "Listing up to {limit} builds from {host}{path}, filters {filters}",
@@ -1515,7 +1631,7 @@ export const behavior = {
           await context.writeResource("builds", "builds", {
             fetchedAt,
             host: globalArgs.host,
-            ...scopeOf(globalArgs),
+            ...scopeOf(scoped),
             filters,
             limit: args.limit,
             count: builds.length,
@@ -1555,11 +1671,12 @@ export const behavior = {
         context: Context,
       ): Promise<MethodResult> => {
         const { globalArgs, signal, logger } = context;
+        const scoped = await withPipeline(globalArgs, signal);
         logger.info("Reading build #{number} from {host}", {
           number: args.number,
           host: globalArgs.host,
         });
-        const build = await fetchBuild(globalArgs, args.number, signal);
+        const build = await fetchBuild(scoped, args.number, signal);
         const dataHandles = await writeBuild(
           context,
           build,
@@ -1582,6 +1699,7 @@ export const behavior = {
         context: Context,
       ): Promise<MethodResult> => {
         const { globalArgs, signal, logger } = context;
+        const scoped = await withPipeline(globalArgs, signal);
         const job = args.job ?? `${args.number}.1`;
         logger.info(
           "Reading the log of job {job} from {host}, keeping {kib} KiB",
@@ -1595,7 +1713,7 @@ export const behavior = {
           globalArgs,
           {
             method: "GET",
-            path: `${buildsPath(globalArgs)}/${args.number}/jobs/${
+            path: `${buildsPath(scoped)}/${args.number}/jobs/${
               encodeURIComponent(job)
             }/log`,
             text: true,
@@ -1618,7 +1736,7 @@ export const behavior = {
           {
             fetchedAt: new Date().toISOString(),
             host: globalArgs.host,
-            ...scopeOf(globalArgs),
+            ...scopeOf(scoped),
             number: args.number,
             job,
             bytes,
@@ -1642,6 +1760,7 @@ export const behavior = {
         context: Context,
       ): Promise<MethodResult> => {
         const { globalArgs, signal, logger } = context;
+        const scoped = await withPipeline(globalArgs, signal);
         logger.info("Listing artifacts of build #{number} from {host}", {
           number: args.number,
           host: globalArgs.host,
@@ -1650,7 +1769,7 @@ export const behavior = {
           globalArgs,
           {
             method: "GET",
-            path: `${buildsPath(globalArgs)}/${args.number}/artifacts`,
+            path: `${buildsPath(scoped)}/${args.number}/artifacts`,
           },
           signal,
         );
@@ -1663,7 +1782,7 @@ export const behavior = {
           {
             fetchedAt: new Date().toISOString(),
             host: globalArgs.host,
-            ...scopeOf(globalArgs),
+            ...scopeOf(scoped),
             number: args.number,
             count: artifacts.length,
             artifacts,
@@ -1685,6 +1804,7 @@ export const behavior = {
         context: Context,
       ): Promise<MethodResult> => {
         const { globalArgs, signal, logger } = context;
+        const scoped = await withPipeline(globalArgs, signal);
         logger.info("Listing annotations of build #{number} from {host}", {
           number: args.number,
           host: globalArgs.host,
@@ -1693,7 +1813,7 @@ export const behavior = {
           globalArgs,
           {
             method: "GET",
-            path: `${buildsPath(globalArgs)}/${args.number}/annotations`,
+            path: `${buildsPath(scoped)}/${args.number}/annotations`,
           },
           signal,
         );
@@ -1707,7 +1827,7 @@ export const behavior = {
           {
             fetchedAt: new Date().toISOString(),
             host: globalArgs.host,
-            ...scopeOf(globalArgs),
+            ...scopeOf(scoped),
             number: args.number,
             count: annotations.length,
             errors,
@@ -1860,13 +1980,16 @@ export const behavior = {
     },
     rebuild: {
       description: "Rebuild a build: a new build with the next number. Needs " +
-        "the forge token. Writes build-<new> and summary-<new>.",
+        "the forge token. Writes build-<new> and summary-<new> from the " +
+        "answer.",
       arguments: BuildArgsSchema,
       execute: async (
         args: BuildArgs,
         context: Context,
       ): Promise<MethodResult> => {
         const { globalArgs, signal, logger } = context;
+        needForgeToken(globalArgs, "rebuild");
+        const scoped = await withPipeline(globalArgs, signal);
         logger.info("Rebuilding build #{number} on {host}", {
           number: args.number,
           host: globalArgs.host,
@@ -1875,25 +1998,32 @@ export const behavior = {
           globalArgs,
           {
             method: "POST",
-            path: `${buildsPath(globalArgs)}/${args.number}/rebuild`,
+            path: `${buildsPath(scoped)}/${args.number}/rebuild`,
             authorize: true,
           },
           signal,
         );
-        const created = normalizeBuild(answer.body);
-        return reread(context, created.number, `Rebuilt #${args.number} as`);
+        // The answer is the new build in full, so nothing is read back: a
+        // read that failed after the rebuild was made would hide it.
+        return writeAnswered(
+          context,
+          normalizeBuild(answer.body),
+          `Rebuilt #${args.number} as`,
+        );
       },
     },
     cancel: {
       description: "Cancel a build. A build that has already ended is left " +
         "as it ended. Needs the forge token. Writes build-<number> and " +
-        "summary-<number>.",
+        "summary-<number> from the answer.",
       arguments: BuildArgsSchema,
       execute: async (
         args: BuildArgs,
         context: Context,
       ): Promise<MethodResult> => {
         const { globalArgs, signal, logger } = context;
+        needForgeToken(globalArgs, "cancel");
+        const scoped = await withPipeline(globalArgs, signal);
         logger.info("Cancelling build #{number} on {host}", {
           number: args.number,
           host: globalArgs.host,
@@ -1902,34 +2032,42 @@ export const behavior = {
           globalArgs,
           {
             method: "POST",
-            path: `${buildsPath(globalArgs)}/${args.number}/cancel`,
+            path: `${buildsPath(scoped)}/${args.number}/cancel`,
             authorize: true,
             accept: [409],
           },
           signal,
         );
+        // 202 answers the build canceling, 409 the build as it ended: both
+        // in full, so nothing is read back.
+        const build = normalizeBuild(answer.body);
         if (answer.status === 409) {
           logger.warning(
             "Build #{number} had already ended {state}; nothing to cancel",
-            {
-              number: args.number,
-              state: normalizeBuild(answer.body).state,
-            },
+            { number: args.number, state: build.state },
           );
         }
-        return reread(context, args.number, "Cancelled");
+        return writeAnswered(context, build, "Cancelled");
       },
     },
     unblock: {
       description: "Answer a build's block with a value per field. Needs the " +
-        "forge token, with read:user. Writes build-<number> and " +
-        "summary-<number>.",
+        "forge token, with read:user, and apiToken to read the build back. " +
+        "Writes build-<number> and summary-<number>.",
       arguments: UnblockArgsSchema,
       execute: async (
         args: UnblockArgs,
         context: Context,
       ): Promise<MethodResult> => {
         const { globalArgs, signal, logger } = context;
+        needForgeToken(globalArgs, "unblock");
+        if (globalArgs.apiToken === undefined) {
+          throw new Error(
+            "unblock reads the build back after answering: set the global " +
+              "apiToken",
+          );
+        }
+        const scoped = await withPipeline(globalArgs, signal);
         logger.info(
           "Answering block {job} of build #{number} on {host} with fields {keys}",
           {
@@ -1939,11 +2077,12 @@ export const behavior = {
             keys: Object.keys(args.fields),
           },
         );
+        // buildq answers with the job alone, so the build is read back.
         await request(
           globalArgs,
           {
             method: "PUT",
-            path: `${buildsPath(globalArgs)}/${args.number}/jobs/${
+            path: `${buildsPath(scoped)}/${args.number}/jobs/${
               encodeURIComponent(args.job)
             }/unblock`,
             body: { fields: args.fields },
@@ -1951,7 +2090,24 @@ export const behavior = {
           },
           signal,
         );
-        return reread(context, args.number, `Unblocked ${args.job} of`);
+        let build: Build;
+        try {
+          build = await fetchBuild(scoped, args.number, signal);
+        } catch (error) {
+          // The block is answered and cannot be answered again: failing here
+          // would read as if it had not been, and a retry would get a 409.
+          logger.warning(
+            "Answered block {job} of build #{number}, but reading the build " +
+              "back failed: {error}. The answer stands; run build to read it.",
+            {
+              job: args.job,
+              number: args.number,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+          return { dataHandles: [] };
+        }
+        return writeAnswered(context, build, `Unblocked ${args.job} of`);
       },
     },
   },
@@ -1959,7 +2115,7 @@ export const behavior = {
     {
       toVersion: "2026.10.24.1",
       description:
-        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; arguments and behavior unchanged",
+        "Write every argument where the registry reads it, so its catalog lists them with their descriptions. Add apiToken, sent as Authorization: Bearer on every read, which buildq needs; read a repository's builds under its pipeline, found from owner and repo when no organization and pipeline are set, since buildq no longer serves /api/repos/; count blocked and unblocked jobs; write rebuild and cancel from their answers. Existing arguments are kept as they are; an instance adds apiToken to read",
       upgradeAttributes: (old: Record<string, unknown>): Record<
         string,
         unknown

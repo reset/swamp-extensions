@@ -82,7 +82,10 @@ swamp behavior run forge ask-merge --arg number=42
 ```
 
 Every method takes `owner` and `repo`, each falling back to the global of its
-name; a method with neither fails before any request.
+name; a method with neither fails before any request. Each must be a name
+Forgejo allows (letters, digits, `-`, `_` and `.`, not `.` or `..`), since it
+goes into the request path as written: a value with `/`, `?`, `#` or `%` is
+refused before any request, so it cannot send the token to another route.
 
 | Method      | Arguments                                         | Calls                                                                                  | Writes                                                          |
 | ----------- | ------------------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
@@ -103,7 +106,11 @@ the latest status of each context with its `state`, `description` and
 `targetUrl`, and `required`: the `contexts` asked for, `passed` (every one
 reports success; true when none was asked for) and `unmet`, one line per context
 that is missing or not successful, for the failure message. List resources carry
-`truncated: true` when more rows may exist beyond what was fetched.
+`truncated: true` when rows exist beyond the last one fetched: `pulls` asks the
+forge's `Link` header for a next page, else compares `X-Total-Count` with the
+last row's position, and stops fetching when nothing lies beyond; `statuses`
+counts contexts by `X-Total-Count` (the body's `total_count` counts one page)
+and reads at most 10 pages. With neither header, a full page counts as more.
 
 `ask-merge` and `ask-rush` read the pull request first and refuse one that is
 merged or not open, so nothing is posted to a pull request the bot cannot act

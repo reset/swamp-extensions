@@ -123,6 +123,8 @@ class FakeForge {
   nextCommentId = 900;
   /** Require the Cloudflare Access headers, redirecting without them. */
   requireAccess = false;
+  /** The most rows a list page answers, as a site's MAX_RESPONSE_ITEMS caps it. */
+  pageCap = Infinity;
   /** Answers instead of the routes when it returns a Response. */
   override: (received: Received) => Response | undefined = () => undefined;
 
@@ -160,7 +162,10 @@ class FakeForge {
     }
     const rest = url.pathname.slice(prefix.length).split("/");
     const page = Number(url.searchParams.get("page") ?? "1");
-    const limit = Number(url.searchParams.get("limit") ?? "30");
+    const limit = Math.min(
+      Number(url.searchParams.get("limit") ?? "30"),
+      this.pageCap,
+    );
 
     if (rest[0] === "pulls" && rest.length === 1) {
       const state = url.searchParams.get("state") ?? "open";
@@ -168,9 +173,10 @@ class FakeForge {
         state === "all" || p.state === state
       );
       const rows = all.slice((page - 1) * limit, page * limit);
-      return Response.json(rows, {
-        headers: { "X-Total-Count": String(all.length) },
-      });
+      const headers = new Headers({ "X-Total-Count": String(all.length) });
+      const link = linkOf(url, all.length, limit, page);
+      if (link !== "") headers.set("Link", link);
+      return Response.json(rows, { headers });
     }
     if (rest[0] === "pulls" && rest.length === 2) {
       const pull = this.pulls.get(Number(rest[1]));
@@ -189,13 +195,17 @@ class FakeForge {
         : states.has("pending")
         ? "pending"
         : "success";
+      // Forgejo's combined status: an empty object for a page with no rows,
+      // otherwise total_count counts this page's rows and X-Total-Count every
+      // context (routers/api/v1/repo/status.go, services/convert/status.go).
+      if (rows.length === 0) return Response.json({});
       return Response.json({
         state,
         sha: rest[1],
-        total_count: all.length,
+        total_count: rows.length,
         statuses: rows,
         repository: { full_name: `${OWNER}/${REPO}` },
-      });
+      }, { headers: { "X-Total-Count": String(all.length) } });
     }
     if (rest[0] === "issues" && rest[2] === "comments") {
       const number = Number(rest[1]);
@@ -217,6 +227,27 @@ class FakeForge {
     }
     return Response.json({ message: "Not Found" }, { status: 404 });
   }
+}
+
+/**
+ * The Link header Forgejo sends on a list (services/context/api.go
+ * genAPILinks): `next` while rows lie beyond this page, `last` unless this is
+ * the last page, `first` and `prev` after the first. Empty when it has none.
+ */
+function linkOf(url: URL, total: number, limit: number, page: number): string {
+  const pages = Math.max(1, Math.ceil(total / limit));
+  const at = (n: number) => {
+    const target = new URL(url);
+    target.searchParams.set("page", String(n));
+    return target.href;
+  };
+  const current = Math.min(page, pages);
+  const links: string[] = [];
+  if (total > current * limit) links.push(`<${at(current + 1)}>; rel="next"`);
+  if (current !== pages) links.push(`<${at(pages)}>; rel="last"`);
+  if (current !== 1) links.push(`<${at(1)}>; rel="first"`);
+  if (current > 1) links.push(`<${at(current - 1)}>; rel="prev"`);
+  return links.join(",");
 }
 
 function serve(
@@ -447,6 +478,67 @@ Deno.test("repoOf falls back to the globals and refuses a missing repository", (
   );
 });
 
+/** Owner or repo values that would move a request to another route. */
+const ROUTE_ESCAPES = ["a/b", "a?b", "a#b", "a%2Fb", "..", ".", "a b"];
+
+Deno.test("owner and repo that would leave the repository's route are refused", () => {
+  const globals: GlobalArgs = {
+    host: "https://forge.example.com",
+    token: "t",
+    ...MARKERS,
+  };
+  const schemas = [
+    behavior.globalArguments,
+    ...Object.values(behavior.methods).map((method) => method.arguments),
+  ];
+  const base = { host: globals.host, token: "t", number: 1, body: "b" };
+  for (const value of ROUTE_ESCAPES) {
+    for (const schema of schemas) {
+      for (const field of ["owner", "repo"]) {
+        assertFalse(
+          schema.safeParse({ ...base, [field]: value }).success,
+          `${field} ${JSON.stringify(value)} parses`,
+        );
+      }
+    }
+    assertRejectsSync(
+      () => repoOf({ owner: value, repo: "b" }, globals),
+      "not a Forgejo name",
+    );
+    assertRejectsSync(
+      () => repoOf({ owner: "a", repo: value }, globals),
+      "not a Forgejo name",
+    );
+  }
+  for (const value of ["my.repo", "a-b_c", "..a", "Game2"]) {
+    assert(
+      behavior.methods.pull.arguments.safeParse({ number: 1, repo: value })
+        .success,
+    );
+    assertEquals(repoOf({ owner: "a", repo: value }, globals).repo, value);
+  }
+});
+
+forgeTest(
+  "a repo that would leave its route sends no request and no token",
+  async (forge, host) => {
+    const { context, getWrittenResources } = testContext(host, {
+      repo: "../../../admin/users?x=",
+    });
+    await assertRejects(
+      () =>
+        behavior.methods.pulls.execute(
+          { state: "open", page: 1, pages: 1 },
+          context,
+        ),
+      Error,
+      "not a Forgejo name",
+    );
+    assertEquals(forge.received.length, 0);
+    assertEquals(getWrittenResources().length, 0);
+  },
+);
+
 // ---------------------------------------------------------------------------
 // Over the fake forge
 // ---------------------------------------------------------------------------
@@ -538,6 +630,64 @@ forgeTest(
       uncounted.getWrittenResources()[0].data.truncated,
       true,
       "a full page with no count may have more",
+    );
+  },
+);
+
+forgeTest(
+  "pulls from a later page is truncated only when rows lie beyond it",
+  async (forge, host) => {
+    for (let n = 1; n <= 60; n++) forge.pulls.set(n, rawPull(n));
+    const run = async (page: number, pages: number) => {
+      forge.received = [];
+      const { context, getWrittenResources } = testContext(host);
+      await behavior.methods.pulls.execute(
+        { state: "all", page, pages },
+        context,
+      );
+      const data = behavior.resources.pulls.schema.parse(
+        getWrittenResources()[0].data,
+      );
+      return { data, requests: forge.received.length };
+    };
+
+    const last = await run(2, 1);
+    assertEquals(last.data.count, 10);
+    assertEquals(last.data.truncated, false, "rows 51-60 of 60: none beyond");
+    const past = await run(2, 3);
+    assertEquals(past.requests, 1, "no page is fetched past the total");
+    assertEquals(past.data.pagesFetched, 1);
+    assertEquals(past.data.truncated, false);
+    assertEquals((await run(1, 1)).data.truncated, true);
+
+    // A forge that sends X-Total-Count but no Link: the count decides.
+    forge.override = (received) => {
+      if (!received.path.endsWith("/pulls")) return undefined;
+      const page = Number(received.query.get("page"));
+      const all = [...forge.pulls.values()];
+      return Response.json(all.slice((page - 1) * 50, page * 50), {
+        headers: { "X-Total-Count": String(all.length) },
+      });
+    };
+    const counted = await run(2, 3);
+    assertEquals(counted.requests, 1);
+    assertEquals(counted.data.count, 10);
+    assertEquals(counted.data.truncated, false);
+    assertEquals((await run(1, 1)).data.truncated, true);
+
+    // A site that caps pages at 30: its Link header counts in its own pages.
+    forge.override = () => undefined;
+    forge.pageCap = 30;
+    const capped = await run(2, 1);
+    assertEquals(capped.data.pulls.map((p) => p.number)[0], 31);
+    assertEquals(capped.data.truncated, false, "rows 31-60 of 60");
+    for (let n = 61; n <= 100; n++) forge.pulls.set(n, rawPull(n));
+    const third = await run(3, 1);
+    assertEquals(third.data.pulls.map((p) => p.number)[0], 61);
+    assertEquals(
+      third.data.truncated,
+      true,
+      "rows 61-90 of 100, though 50 a page would put page 3 past the end",
     );
   },
 );
@@ -796,6 +946,32 @@ forgeTest(
       "an older forge answers null for no statuses",
     );
     assertEquals(empty.required.passed, true);
+  },
+);
+
+forgeTest(
+  "statuses reads past the first page by X-Total-Count, not total_count",
+  async (forge, host) => {
+    const sha = "f".repeat(40);
+    forge.statuses.set(
+      sha,
+      Array.from(
+        { length: 60 },
+        (_, i) => rawStatus(i + 1, `check-${i + 1}`, "success"),
+      ),
+    );
+    const { context, getWrittenResources } = testContext(host);
+    await behavior.methods.statuses.execute(
+      { sha, required: ["check-60"] },
+      context,
+    );
+    assertEquals(forge.received.length, 2, "two pages of 50");
+    const data = behavior.resources.statuses.schema.parse(
+      getWrittenResources()[0].data,
+    );
+    assertEquals(data.count, 60);
+    assertEquals(data.truncated, false);
+    assertEquals(data.required.passed, true, "check-60 is on the second page");
   },
 );
 
