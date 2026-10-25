@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@reset/steam"
-version: "2026.10.20.1"
+version: "2026.10.24.1"
 license: MIT
 description: Upload a game's builds to Steam and set them live on a branch.
 # The public home of every @reset extension (decided October 20, 2026); the

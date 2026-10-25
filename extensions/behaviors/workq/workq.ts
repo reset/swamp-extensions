@@ -596,124 +596,108 @@ export class WorkqError extends Error {
 // `satisfies` keeps each schema in step with its interface)
 // ---------------------------------------------------------------------------
 
-const slug = (what: string) =>
-  z.string().regex(SLUG_PATTERN).describe(
-    `${what}: lowercase letters, digits and hyphens.`,
-  );
-
 const GlobalArgsSchema = z.object({
-  host: z
-    .url()
+  host: z.url()
     .describe("Base URL of the deployment, such as https://workq.example.com."),
-  clientId: z
-    .string()
+  clientId: z.string()
     .min(1)
     .meta({ sensitive: true })
     .describe(
       "Client id of the Access service token, sent as CF-Access-Client-Id. The deployment must list it as a service caller.",
     ),
-  clientSecret: z
-    .string()
+  clientSecret: z.string()
     .min(1)
     .meta({ sensitive: true })
     .describe(
       "Client secret of the Access service token, sent as CF-Access-Client-Secret.",
     ),
-  org: slug("Default org for every method that takes one").optional(),
-  project: slug("Default project for every method that takes one").optional(),
+  org: z.string().regex(SLUG_PATTERN).optional().describe(
+    "Default org for every method that takes one: lowercase letters, digits and hyphens.",
+  ),
+  project: z.string().regex(SLUG_PATTERN).optional().describe(
+    "Default project for every method that takes one: lowercase letters, digits and hyphens.",
+  ),
 }) satisfies z.ZodType<GlobalArgs>;
 
-const ProjectShape = {
-  org: slug("The org, overriding the global org").optional(),
-  project: slug("The project, overriding the global project").optional(),
-};
+const ProjectArgsSchema = z.object({
+  org: z.string().regex(SLUG_PATTERN).optional().describe(
+    "The org, overriding the global org: lowercase letters, digits and hyphens.",
+  ),
+  project: z.string().regex(SLUG_PATTERN).optional().describe(
+    "The project, overriding the global project: lowercase letters, digits and hyphens.",
+  ),
+}) satisfies z.ZodType<ProjectArgs>;
 
-const ItemShape = {
-  org: slug("The org, overriding the global org").optional(),
-  key: z
-    .string()
+const ItemArgsSchema = z.object({
+  org: z.string().regex(SLUG_PATTERN).optional().describe(
+    "The org, overriding the global org: lowercase letters, digits and hyphens.",
+  ),
+  key: z.string()
     .regex(KEY_PATTERN)
     .describe("The item's key, such as ROG-12."),
-};
+}) satisfies z.ZodType<ItemArgs>;
 
-const ProjectArgsSchema = z.object(ProjectShape) satisfies z.ZodType<
-  ProjectArgs
->;
-
-const ItemArgsSchema = z.object(ItemShape) satisfies z.ZodType<ItemArgs>;
-
-const PrioritySchema = z.enum(PRIORITIES);
-const DateSchema = z.string().regex(DATE_PATTERN).describe("YYYY-MM-DD.");
-const VersionSchema = z.string().regex(VERSION_PATTERN);
 const NameSchema = z.string().trim().min(1).max(100);
 
 const ListItemsArgsSchema = z.object({
-  ...ProjectShape,
-  view: z
-    .string()
+  org: z.string().regex(SLUG_PATTERN).optional().describe(
+    "The org, overriding the global org: lowercase letters, digits and hyphens.",
+  ),
+  project: z.string().regex(SLUG_PATTERN).optional().describe(
+    "The project, overriding the global project: lowercase letters, digits and hyphens.",
+  ),
+  view: z.string()
     .optional()
     .describe("A saved view, by slug; its filter applies first."),
   status: z.string().optional().describe("Only items with this status name."),
-  group: z
-    .enum(STATUS_GROUPS)
+  group: z.enum(STATUS_GROUPS)
     .optional()
     .describe("Only items in this status group."),
   type: z.string().optional().describe("Only items of this type name."),
-  assignee: z
-    .string()
+  assignee: z.string()
     .optional()
     .describe(
       "Only items assigned to this email. Sent to the API, never kept in the resource.",
     ),
   label: z.string().optional().describe("Only items with this label."),
-  parent: z
-    .string()
+  parent: z.string()
     .regex(KEY_PATTERN)
     .optional()
     .describe("Only children of this item key."),
-  unranked: z
-    .boolean()
+  unranked: z.boolean()
     .optional()
     .describe("Only unranked items: the triage view."),
-  release: z
-    .string()
+  release: z.string()
     .optional()
     .describe("Only items that first shipped in this version, or none."),
-  sprint: z
-    .union([
-      z.number().int().min(1),
-      z.string().regex(/^(?:none|current|[1-9][0-9]*)$/),
-    ])
+  sprint: z.union([
+    z.number().int().min(1),
+    z.string().regex(/^(?:none|current|[1-9][0-9]*)$/),
+  ])
     .optional()
     .describe("Only items in this sprint number, or none, or current."),
-  milestone: z
-    .string()
+  milestone: z.string()
     .optional()
     .describe("Only items under this milestone slug, or none."),
-  query: z
-    .string()
+  query: z.string()
     .max(500)
     .optional()
     .describe("A search over titles, bodies and comments."),
-  order: z
-    .enum(ORDERS)
+  order: z.enum(ORDERS)
     .optional()
     .describe("newest (the default) or rank, the backlog order."),
-  limit: z
-    .number()
+  limit: z.number()
     .int()
     .min(1)
     .max(ITEMS_PAGE_MAX)
     .default(ITEMS_PAGE_SIZE)
     .describe("Items per page, up to 200."),
-  offset: z
-    .number()
+  offset: z.number()
     .int()
     .min(0)
     .default(0)
     .describe("Items to skip before the first page."),
-  pages: z
-    .number()
+  pages: z.number()
     .int()
     .min(1)
     .max(50)
@@ -729,55 +713,56 @@ const externalPair = (value: {
 
 const EXTERNAL_MESSAGE = "externalSource and externalId go together.";
 
-const CreateItemArgsSchema = z
-  .object({
-    ...ProjectShape,
-    title: z.string().trim().min(1).max(500).describe("The title."),
-    body: z.string().max(1_000_000).optional().describe("The body, Markdown."),
-    type: NameSchema.optional().describe(
-      "Type name; the project's default when left out.",
+const CreateItemArgsSchema = z.object({
+  org: z.string().regex(SLUG_PATTERN).optional().describe(
+    "The org, overriding the global org: lowercase letters, digits and hyphens.",
+  ),
+  project: z.string().regex(SLUG_PATTERN).optional().describe(
+    "The project, overriding the global project: lowercase letters, digits and hyphens.",
+  ),
+  title: z.string().trim().min(1).max(500).describe("The title."),
+  body: z.string().max(1_000_000).optional().describe("The body, Markdown."),
+  type: z.string().trim().min(1).max(100).optional().describe(
+    "Type name; the project's default when left out.",
+  ),
+  status: z.string().trim().min(1).max(100).optional().describe(
+    "Status name; the project's default when left out.",
+  ),
+  priority: z.enum(PRIORITIES).optional().describe(
+    "Priority; medium when left out.",
+  ),
+  assignee: z.email().optional().describe("A member's email."),
+  labels: z.array(NameSchema)
+    .optional()
+    .describe("Label names, each existing in the project."),
+  dueDate: z.string().regex(DATE_PATTERN).optional().describe("YYYY-MM-DD."),
+  parent: z.string()
+    .regex(KEY_PATTERN)
+    .optional()
+    .describe("Key of the parent item, in the same project."),
+  sprint: z.number()
+    .int()
+    .min(1)
+    .optional()
+    .describe("Sprint number to plan it into."),
+  milestone: z.string().regex(SLUG_PATTERN).optional().describe(
+    "Milestone to put it under: lowercase letters, digits and hyphens.",
+  ),
+  externalSource: z.string()
+    .trim()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("With externalId, makes the create idempotent."),
+  externalId: z.string()
+    .trim()
+    .min(1)
+    .max(256)
+    .optional()
+    .describe(
+      "The source's id for the item: the same pair again answers the first item.",
     ),
-    status: NameSchema.optional().describe(
-      "Status name; the project's default when left out.",
-    ),
-    priority: PrioritySchema.optional().describe(
-      "Priority; medium when left out.",
-    ),
-    assignee: z.email().optional().describe("A member's email."),
-    labels: z
-      .array(NameSchema)
-      .optional()
-      .describe("Label names, each existing in the project."),
-    dueDate: DateSchema.optional(),
-    parent: z
-      .string()
-      .regex(KEY_PATTERN)
-      .optional()
-      .describe("Key of the parent item, in the same project."),
-    sprint: z
-      .number()
-      .int()
-      .min(1)
-      .optional()
-      .describe("Sprint number to plan it into."),
-    milestone: slug("Milestone to put it under").optional(),
-    externalSource: z
-      .string()
-      .trim()
-      .min(1)
-      .max(100)
-      .optional()
-      .describe("With externalId, makes the create idempotent."),
-    externalId: z
-      .string()
-      .trim()
-      .min(1)
-      .max(256)
-      .optional()
-      .describe(
-        "The source's id for the item: the same pair again answers the first item.",
-      ),
-  })
+})
   .refine(externalPair, { message: EXTERNAL_MESSAGE }) satisfies z.ZodType<
     CreateItemArgs
   >;
@@ -797,97 +782,110 @@ const CHANGE_FIELDS = [
   "milestone",
 ] as const;
 
-const ChangeItemArgsSchema = z
-  .object({
-    ...ItemShape,
-    revision: z
-      .number()
-      .int()
-      .min(0)
-      .optional()
-      .describe("The revision read; the item is read first when left out."),
-    requestId: z
-      .uuid()
-      .optional()
-      .describe(
-        "A UUID kept for this write, so a resend answers the first outcome. One is made when left out.",
-      ),
-    title: z.string().trim().min(1).max(500).optional().describe("New title."),
-    body: z.string().max(1_000_000).optional().describe("New body, Markdown."),
-    type: NameSchema.optional().describe("New type name."),
-    status: NameSchema.optional().describe(
-      "New status name: a move the workflow must allow.",
+const ChangeItemArgsSchema = z.object({
+  org: z.string().regex(SLUG_PATTERN).optional().describe(
+    "The org, overriding the global org: lowercase letters, digits and hyphens.",
+  ),
+  key: z.string()
+    .regex(KEY_PATTERN)
+    .describe("The item's key, such as ROG-12."),
+  revision: z.number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("The revision read; the item is read first when left out."),
+  requestId: z.uuid()
+    .optional()
+    .describe(
+      "A UUID kept for this write, so a resend answers the first outcome. One is made when left out.",
     ),
-    priority: PrioritySchema.optional().describe("New priority."),
-    assignee: z
-      .email()
-      .nullable()
-      .optional()
-      .describe("A member's email, or null for nobody."),
-    labels: z
-      .array(NameSchema)
-      .optional()
-      .describe("The whole label set; what is not named is removed."),
-    dueDate: DateSchema.nullable().optional(),
-    parent: z
-      .string()
-      .regex(KEY_PATTERN)
-      .nullable()
-      .optional()
-      .describe("Parent key, or null for none."),
-    release: VersionSchema.nullable()
-      .optional()
-      .describe("Release version it first shipped in, or null for not yet."),
-    sprint: z
-      .number()
-      .int()
-      .min(1)
-      .nullable()
-      .optional()
-      .describe("Sprint number, or null for none."),
-    milestone: z
-      .string()
-      .regex(SLUG_PATTERN)
-      .nullable()
-      .optional()
-      .describe("Milestone slug, or null for none."),
-  })
+  title: z.string().trim().min(1).max(500).optional().describe("New title."),
+  body: z.string().max(1_000_000).optional().describe("New body, Markdown."),
+  type: z.string().trim().min(1).max(100).optional().describe(
+    "New type name.",
+  ),
+  status: z.string().trim().min(1).max(100).optional().describe(
+    "New status name: a move the workflow must allow.",
+  ),
+  priority: z.enum(PRIORITIES).optional().describe("New priority."),
+  assignee: z.email()
+    .nullable()
+    .optional()
+    .describe("A member's email, or null for nobody."),
+  labels: z.array(NameSchema)
+    .optional()
+    .describe("The whole label set; what is not named is removed."),
+  dueDate: z.string()
+    .regex(DATE_PATTERN)
+    .nullable()
+    .optional()
+    .describe("YYYY-MM-DD."),
+  parent: z.string()
+    .regex(KEY_PATTERN)
+    .nullable()
+    .optional()
+    .describe("Parent key, or null for none."),
+  release: z.string()
+    .regex(VERSION_PATTERN)
+    .nullable()
+    .optional()
+    .describe("Release version it first shipped in, or null for not yet."),
+  sprint: z.number()
+    .int()
+    .min(1)
+    .nullable()
+    .optional()
+    .describe("Sprint number, or null for none."),
+  milestone: z.string()
+    .regex(SLUG_PATTERN)
+    .nullable()
+    .optional()
+    .describe("Milestone slug, or null for none."),
+})
   .refine(
     (value) => CHANGE_FIELDS.some((field) => value[field] !== undefined),
     { message: "Give at least one field to change." },
   ) satisfies z.ZodType<ChangeItemArgs>;
 
-const CommentArgsSchema = z
-  .object({
-    ...ItemShape,
-    body: z
-      .string()
-      .trim()
-      .min(1)
-      .max(1_000_000)
-      .describe("The comment, Markdown."),
-    externalSource: z
-      .string()
-      .trim()
-      .min(1)
-      .max(100)
-      .optional()
-      .describe("With externalId, makes the create idempotent."),
-    externalId: z
-      .string()
-      .trim()
-      .min(1)
-      .max(256)
-      .optional()
-      .describe("The source's id for the comment."),
-  })
+const CommentArgsSchema = z.object({
+  org: z.string().regex(SLUG_PATTERN).optional().describe(
+    "The org, overriding the global org: lowercase letters, digits and hyphens.",
+  ),
+  key: z.string()
+    .regex(KEY_PATTERN)
+    .describe("The item's key, such as ROG-12."),
+  body: z.string()
+    .trim()
+    .min(1)
+    .max(1_000_000)
+    .describe("The comment, Markdown."),
+  externalSource: z.string()
+    .trim()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("With externalId, makes the create idempotent."),
+  externalId: z.string()
+    .trim()
+    .min(1)
+    .max(256)
+    .optional()
+    .describe("The source's id for the comment."),
+})
   .refine(externalPair, { message: EXTERNAL_MESSAGE }) satisfies z.ZodType<
     CommentArgs
   >;
 
 const ReleaseArgsSchema = z.object({
-  ...ProjectShape,
-  version: VersionSchema.describe("The release's version, such as 1.8.2."),
+  org: z.string().regex(SLUG_PATTERN).optional().describe(
+    "The org, overriding the global org: lowercase letters, digits and hyphens.",
+  ),
+  project: z.string().regex(SLUG_PATTERN).optional().describe(
+    "The project, overriding the global project: lowercase letters, digits and hyphens.",
+  ),
+  version: z.string()
+    .regex(VERSION_PATTERN)
+    .describe("The release's version, such as 1.8.2."),
 }) satisfies z.ZodType<ReleaseArgs>;
 
 const OrgRefSchema = z.object({
@@ -1576,7 +1574,7 @@ export const behavior = {
   // String literals, not constants: the registry catalog reads them from the
   // source.
   type: "@reset/workq",
-  version: "2026.10.21.1",
+  version: "2026.10.24.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     me: {
@@ -1687,7 +1685,9 @@ export const behavior = {
       description: "List the projects of an org the caller can see. " +
         "Writes projects-<org>.",
       arguments: z.object({
-        org: slug("The org, overriding the global org").optional(),
+        org: z.string().regex(SLUG_PATTERN).optional().describe(
+          "The org, overriding the global org: lowercase letters, digits and hyphens.",
+        ),
       }),
       execute: async (
         args: { org?: string },
@@ -2244,4 +2244,15 @@ export const behavior = {
       },
     },
   },
+  upgrades: [
+    {
+      toVersion: "2026.10.24.1",
+      description:
+        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; arguments and behavior unchanged",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+  ],
 };

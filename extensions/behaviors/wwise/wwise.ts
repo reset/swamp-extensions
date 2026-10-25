@@ -408,15 +408,13 @@ const isWebSocketUrl = (value: string): boolean => {
 };
 
 const GlobalArgsSchema = z.object({
-  host: z
-    .string()
+  host: z.string()
     .default(DEFAULT_HOST)
     .refine(isWebSocketUrl, { message: "host must be a ws:// or wss:// URL" })
     .describe(
       "WAAPI's WAMP endpoint: ws://127.0.0.1:8080/waapi unless Wwise's User Preferences say otherwise.",
     ),
-  timeoutSeconds: z
-    .number()
+  timeoutSeconds: z.number()
     .int()
     .min(1)
     .max(3600)
@@ -426,51 +424,44 @@ const GlobalArgsSchema = z.object({
     ),
 }) satisfies z.ZodType<GlobalArgs>;
 
-const limitShape = (fallback: number, description: string) =>
-  z.number().int().min(1).max(100_000).default(fallback).describe(description);
-
-const offsetShape = z
-  .number()
-  .int()
-  .min(0)
-  .default(0)
-  .describe("Objects to skip before the first one kept.");
-
 const QueryArgsSchema = z.object({
-  waql: z
-    .string()
+  waql: z.string()
     .regex(/^\s*\$/, "a WAQL query starts with $")
     .describe(
       "The WAQL query, starting with $. Example: $ from type Sound where volume < 0",
     ),
-  return: z
-    .array(z.string().min(1))
+  return: z.array(z.string().min(1))
     .min(1)
     .default(DEFAULT_QUERY_RETURN)
     .describe(
       "Accessors and properties to return for each object, such as id, name, type, path, notes, or Volume.",
     ),
-  offset: offsetShape,
-  limit: limitShape(
-    DEFAULT_QUERY_LIMIT,
-    "Objects to keep at most. The record says truncated when more matched.",
-  ),
-  name: z
-    .string()
+  offset: z.number()
+    .int()
+    .min(0)
+    .default(0)
+    .describe("Objects to skip before the first one kept."),
+  limit: z.number()
+    .int()
+    .min(1)
+    .max(100_000)
+    .default(DEFAULT_QUERY_LIMIT)
+    .describe(
+      "Objects to keep at most. The record says truncated when more matched.",
+    ),
+  name: z.string()
     .regex(INSTANCE_NAME_PATTERN, "lowercase letters, digits and dashes")
     .default("query")
     .describe(
       "Suffix of the instance name, query-<name>, so several queries can coexist.",
     ),
-  platform: z
-    .string()
+  platform: z.string()
     .min(1)
     .optional()
     .describe(
       "Platform name or id whose values are returned. Wwise's current one when unset.",
     ),
-  language: z
-    .string()
+  language: z.string()
     .min(1)
     .optional()
     .describe(
@@ -479,76 +470,75 @@ const QueryArgsSchema = z.object({
 }) satisfies z.ZodType<QueryArgs>;
 
 const ListArgsSchema = z.object({
-  offset: offsetShape,
-  limit: limitShape(
-    DEFAULT_LIST_LIMIT,
-    "Objects to keep at most. The record says truncated when more exist.",
-  ),
+  offset: z.number()
+    .int()
+    .min(0)
+    .default(0)
+    .describe("Objects to skip before the first one kept."),
+  limit: z.number()
+    .int()
+    .min(1)
+    .max(100_000)
+    .default(DEFAULT_LIST_LIMIT)
+    .describe(
+      "Objects to keep at most. The record says truncated when more exist.",
+    ),
 }) satisfies z.ZodType<ListArgs>;
 
 const GenerateArgsSchema = z.object({
-  banks: z
-    .array(z.string().min(1))
+  banks: z.array(z.string().min(1))
     .default([])
     .describe(
       "Names of the user-defined SoundBanks to generate. Empty means all of them.",
     ),
-  platforms: z
-    .array(z.string().min(1))
+  platforms: z.array(z.string().min(1))
     .default([])
     .describe(
       "Platform names or ids to generate for. Empty means every platform.",
     ),
-  languages: z
-    .array(z.string().min(1))
+  languages: z.array(z.string().min(1))
     .default([])
     .describe("Language names or ids to generate. Empty means every language."),
-  skipLanguages: z
-    .boolean()
+  skipLanguages: z.boolean()
     .default(false)
     .describe("Generate no localized SoundBank at all."),
-  rebuildSoundBanks: z
-    .boolean()
+  rebuildSoundBanks: z.boolean()
     .default(false)
     .describe("Rebuild every SoundBank instead of only what changed."),
-  clearAudioFileCache: z
-    .boolean()
+  clearAudioFileCache: z.boolean()
     .default(false)
     .describe(
       "Clear the audio file cache first, so every source is reconverted.",
     ),
-  writeToDisk: z
-    .boolean()
+  writeToDisk: z.boolean()
     .default(true)
     .describe("Write the SoundBanks and their info files to disk."),
-  rebuildInitBank: z
-    .boolean()
+  rebuildInitBank: z.boolean()
     .default(false)
     .describe(
       "Rebuild the Init bank of each platform without rebuilding everything.",
     ),
-  deadlineSeconds: z
-    .number()
+  deadlineSeconds: z.number()
     .int()
     .min(1)
     .max(86_400)
     .default(DEFAULT_GENERATE_DEADLINE_SECONDS)
     .describe("Seconds the generation may take before the method fails."),
-  failOnError: z
-    .boolean()
+  failOnError: z.boolean()
     .default(true)
     .describe(
       "Fail the method when the log carries an Error or Fatal Error. Off, the record carries succeeded=false instead.",
     ),
-  logLimit: limitShape(
-    DEFAULT_LOG_LIMIT,
-    "Log entries the record keeps at most.",
-  ),
+  logLimit: z.number()
+    .int()
+    .min(1)
+    .max(100_000)
+    .default(DEFAULT_LOG_LIMIT)
+    .describe("Log entries the record keeps at most."),
 }) satisfies z.ZodType<GenerateArgs>;
 
 const SaveArgsSchema = z.object({
-  autoCheckOutToSourceControl: z
-    .boolean()
+  autoCheckOutToSourceControl: z.boolean()
     .default(true)
     .describe(
       "Let Wwise check the affected Work Units out of source control first.",
@@ -674,8 +664,7 @@ const GenerationLogEntrySchema = z.object({
   time: z.number().int().optional(),
   messageId: z.string().optional(),
   message: z.string(),
-  platform: z
-    .object({ id: z.string().optional(), name: z.string().optional() })
+  platform: z.object({ id: z.string().optional(), name: z.string().optional() })
     .optional(),
   parameters: z.array(z.string()).optional(),
 }) satisfies z.ZodType<GenerationLogEntry>;
@@ -1538,7 +1527,7 @@ export const behavior = {
   // String literals, not constants: the registry catalog reads them from the
   // source.
   type: "@reset/wwise",
-  version: "2026.10.20.1",
+  version: "2026.10.24.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     info: {
@@ -1940,4 +1929,15 @@ export const behavior = {
       },
     },
   },
+  upgrades: [
+    {
+      toVersion: "2026.10.24.1",
+      description:
+        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; arguments and behavior unchanged",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+  ],
 };

@@ -281,88 +281,63 @@ export class ForgejoError extends Error {
 // ---------------------------------------------------------------------------
 
 const GlobalArgsSchema = z.object({
-  host: z
-    .url()
+  host: z.url()
     .describe("Base URL of the forge, such as https://forge.example.com."),
-  token: z
-    .string()
+  token: z.string()
     .min(1)
     .meta({ sensitive: true })
     .describe(
       "Access token, sent as Authorization: token. Reading needs read:repository; comment, ask-merge and ask-rush need write:issue.",
     ),
-  owner: z
-    .string()
+  owner: z.string()
     .min(1)
     .optional()
     .describe("Default repository owner. A method argument overrides it."),
-  repo: z
-    .string()
+  repo: z.string()
     .min(1)
     .optional()
     .describe("Default repository name. A method argument overrides it."),
-  accessClientId: z
-    .string()
+  accessClientId: z.string()
     .min(1)
     .optional()
     .describe(
       "Cloudflare Access service token id, sent as CF-Access-Client-Id when the forge sits behind Access. Set both or neither.",
     ),
-  accessClientSecret: z
-    .string()
+  accessClientSecret: z.string()
     .min(1)
     .optional()
     .meta({ sensitive: true })
     .describe(
       "Cloudflare Access service token secret, sent as CF-Access-Client-Secret. Set both or neither.",
     ),
-  mergeMarker: z
-    .string()
+  mergeMarker: z.string()
     .min(1)
     .default(DEFAULT_MERGE_MARKER)
     .describe("The line the merge bot reads as a merge ask."),
-  rushMarker: z
-    .string()
+  rushMarker: z.string()
     .min(1)
     .default(DEFAULT_RUSH_MARKER)
     .describe("The line the merge bot reads as an untested merge ask."),
 }) satisfies z.ZodType<GlobalArgs>;
 
-const RepoShape = {
-  owner: z
-    .string()
+const PullsArgsSchema = z.object({
+  owner: z.string()
     .min(1)
     .optional()
     .describe("Repository owner. Falls back to the global owner."),
-  repo: z
-    .string()
+  repo: z.string()
     .min(1)
     .optional()
     .describe("Repository name. Falls back to the global repo."),
-};
-
-const NumberShape = {
-  number: z
-    .number()
-    .int()
-    .positive()
-    .describe("The pull request's number."),
-};
-
-const PullsArgsSchema = z.object({
-  ...RepoShape,
-  state: z
-    .enum(PULL_STATES)
+  state: z.enum(PULL_STATES)
     .default("open")
     .describe("open, closed or all."),
-  page: z
-    .number()
+  page: z.number()
     .int()
     .min(1)
     .default(1)
     .describe("First page to fetch, 1-based."),
-  pages: z
-    .number()
+  pages: z.number()
     .int()
     .min(1)
     .max(20)
@@ -371,31 +346,44 @@ const PullsArgsSchema = z.object({
 }) satisfies z.ZodType<PullsArgs>;
 
 const PullArgsSchema = z.object({
-  ...RepoShape,
-  ...NumberShape,
+  owner: z.string()
+    .min(1)
+    .optional()
+    .describe("Repository owner. Falls back to the global owner."),
+  repo: z.string()
+    .min(1)
+    .optional()
+    .describe("Repository name. Falls back to the global repo."),
+  number: z.number()
+    .int()
+    .positive()
+    .describe("The pull request's number."),
 }) satisfies z.ZodType<PullArgs>;
 
-const StatusesArgsSchema = z
-  .object({
-    ...RepoShape,
-    number: z
-      .number()
-      .int()
-      .positive()
-      .optional()
-      .describe("The pull request whose head commit to read."),
-    sha: z
-      .string()
-      .regex(/^[0-9a-f]{7,64}$/i)
-      .optional()
-      .describe("The commit to read, as a hex sha."),
-    required: z
-      .array(z.string().min(1))
-      .default([])
-      .describe(
-        "Contexts that must report success for the gate to pass, such as buildq.",
-      ),
-  })
+const StatusesArgsSchema = z.object({
+  owner: z.string()
+    .min(1)
+    .optional()
+    .describe("Repository owner. Falls back to the global owner."),
+  repo: z.string()
+    .min(1)
+    .optional()
+    .describe("Repository name. Falls back to the global repo."),
+  number: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("The pull request whose head commit to read."),
+  sha: z.string()
+    .regex(/^[0-9a-f]{7,64}$/i)
+    .optional()
+    .describe("The commit to read, as a hex sha."),
+  required: z.array(z.string().min(1))
+    .default([])
+    .describe(
+      "Contexts that must report success for the gate to pass, such as buildq.",
+    ),
+})
   .refine(
     (value) => (value.number === undefined) !== (value.sha === undefined),
     {
@@ -404,10 +392,19 @@ const StatusesArgsSchema = z
   ) satisfies z.ZodType<StatusesArgs>;
 
 const CommentArgsSchema = z.object({
-  ...RepoShape,
-  ...NumberShape,
-  body: z
-    .string()
+  owner: z.string()
+    .min(1)
+    .optional()
+    .describe("Repository owner. Falls back to the global owner."),
+  repo: z.string()
+    .min(1)
+    .optional()
+    .describe("Repository name. Falls back to the global repo."),
+  number: z.number()
+    .int()
+    .positive()
+    .describe("The pull request's number."),
+  body: z.string()
     .min(1)
     .describe("The comment's text. Posted, never stored."),
 }) satisfies z.ZodType<CommentArgs>;
@@ -951,7 +948,7 @@ export const behavior = {
   // String literals, not constants: the registry catalog reads them from the
   // source. The collective is provisional, rename it here.
   type: "@reset/forgejo-pulls",
-  version: "2026.10.21.1",
+  version: "2026.10.24.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     pulls: {
@@ -1313,4 +1310,15 @@ export const behavior = {
         ),
     },
   },
+  upgrades: [
+    {
+      toVersion: "2026.10.24.1",
+      description:
+        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; arguments and behavior unchanged",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+  ],
 };

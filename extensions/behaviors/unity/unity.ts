@@ -82,26 +82,20 @@ const RESERVED_ARGUMENTS = new Set(
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 
 const GlobalArgsSchema = z.object({
-  projectPath: z.string().min(1).meta({
-    description:
-      "The Unity project directory (holds Assets and ProjectSettings), absolute or relative to the repository",
-  }),
-  editor: z
-    .string()
+  projectPath: z.string().min(1).describe(
+    "The Unity project directory (holds Assets and ProjectSettings), absolute or relative to the repository",
+  ),
+  editor: z.string()
     .min(1)
-    .meta({
-      description:
-        "Path of the Unity editor executable to run. Leave unset to use Unity Hub's default install location for the project's editor version",
-    })
-    .optional(),
-  timeoutSeconds: z.number().int().positive().default(1800).meta({
-    description:
-      "Kill the editor and fail when it has not exited after this many seconds",
-  }),
-  logDir: z.string().min(1).default(".swamp/unity/logs").meta({
-    description:
-      "Directory the editor logs and test result files are written to, absolute or relative to the repository",
-  }),
+    .optional().describe(
+      "Path of the Unity editor executable to run. Leave unset to use Unity Hub's default install location for the project's editor version",
+    ),
+  timeoutSeconds: z.number().int().positive().default(1800).describe(
+    "Kill the editor and fail when it has not exited after this many seconds",
+  ),
+  logDir: z.string().min(1).default(".swamp/unity/logs").describe(
+    "Directory the editor logs and test result files are written to, absolute or relative to the repository",
+  ),
 });
 
 /** Global arguments of a behavior instance, as validated by swamp. */
@@ -122,9 +116,9 @@ const _GlobalArgsMatch: Same<
 > = true;
 
 const CompileArgsSchema = z.object({
-  maxDiagnostics: z.number().int().positive().max(1000).default(50).meta({
-    description: "How many compiler errors and warnings the record keeps",
-  }),
+  maxDiagnostics: z.number().int().positive().max(1000).default(50).describe(
+    "How many compiler errors and warnings the record keeps",
+  ),
 });
 
 /** Arguments of the `compile` method. */
@@ -149,29 +143,22 @@ const _TestPlatformMatch: Same<
 > = true;
 
 const TestArgsSchema = z.object({
-  platform: TestPlatformSchema.default("EditMode").meta({
-    description:
-      "EditMode runs Edit Mode tests, PlayMode runs Play Mode tests in the editor (-testPlatform)",
-  }),
-  testFilter: z
-    .string()
+  platform: z.enum(["EditMode", "PlayMode"]).default("EditMode").describe(
+    "EditMode runs Edit Mode tests, PlayMode runs Play Mode tests in the editor (-testPlatform)",
+  ),
+  testFilter: z.string()
     .min(1)
-    .meta({
-      description:
-        "Semicolon-separated test names or a regular expression on full names, passed as -testFilter",
-    })
-    .optional(),
-  testCategory: z
-    .string()
+    .optional().describe(
+      "Semicolon-separated test names or a regular expression on full names, passed as -testFilter",
+    ),
+  testCategory: z.string()
     .min(1)
-    .meta({
-      description:
-        "Semicolon-separated categories or a regular expression on category names, passed as -testCategory",
-    })
-    .optional(),
-  maxFailures: z.number().int().positive().max(1000).default(50).meta({
-    description: "How many failed tests the record keeps with their messages",
-  }),
+    .optional().describe(
+      "Semicolon-separated categories or a regular expression on category names, passed as -testCategory",
+    ),
+  maxFailures: z.number().int().positive().max(1000).default(50).describe(
+    "How many failed tests the record keeps with their messages",
+  ),
 });
 
 /** Arguments of the `test` method. */
@@ -223,23 +210,30 @@ const _BuildTargetMatch: Same<
 > = true;
 
 const BuildArgsSchema = z.object({
-  method: z
-    .string()
+  method: z.string()
     .regex(
       /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$/,
       "a method is Class.Method or Namespace.Class.Method",
     )
-    .meta({
-      description:
-        "The static method in an Editor folder of the project that makes the build, passed as -executeMethod",
-    }),
-  buildTarget: BuildTargetSchema.meta({
-    description: "The active build target the editor opens with (-buildTarget)",
-  }),
-  extraArgs: z.array(z.string().min(1)).default([]).meta({
-    description:
-      "Further command-line arguments appended as they are, for the method to read with System.Environment.GetCommandLineArgs",
-  }),
+    .describe(
+      "The static method in an Editor folder of the project that makes the build, passed as -executeMethod",
+    ),
+  buildTarget: z.enum([
+    "android",
+    "cloudrendering",
+    "ios",
+    "linux64",
+    "osxuniversal",
+    "tvos",
+    "visionos",
+    "windowsstoreapps",
+    "webgl",
+    "win",
+    "win64",
+  ]).describe("The active build target the editor opens with (-buildTarget)"),
+  extraArgs: z.array(z.string().min(1)).default([]).describe(
+    "Further command-line arguments appended as they are, for the method to read with System.Environment.GetCommandLineArgs",
+  ),
 });
 
 /** Arguments of the `build` method. */
@@ -1014,7 +1008,7 @@ async function runEditor(
 /** The Unity batch-mode behavior. */
 export const behavior = {
   type: "@reset/unity",
-  version: "2026.10.20.1",
+  version: "2026.10.24.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     version: {
@@ -1407,4 +1401,15 @@ export const behavior = {
       },
     },
   },
+  upgrades: [
+    {
+      toVersion: "2026.10.24.1",
+      description:
+        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; arguments and behavior unchanged",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+  ],
 };
