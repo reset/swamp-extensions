@@ -198,8 +198,9 @@ Deno.test("items logs its filters readably and never the token", async () => {
   assertFalse(listing.includes("[object Object]"), listing);
   assertStringIncludes(
     listing,
-    'filters status=active, level=error, environment=production, query="NullReference"',
+    "filters status=active, level=error, environment=production, query=(given)",
   );
+  assertFalse(listing.includes("NullReference"), "the query text stays out");
   for (const log of getLogs()) {
     assertFalse(JSON.stringify([log.message, log.args]).includes(TOKEN));
   }
@@ -222,7 +223,7 @@ Deno.test("items logs its filters readably and never the token", async () => {
 Deno.test("items marks a full last page truncated and honours total_count", async () => {
   const full = testContext();
   await withMockedFetch(
-    [envelope({ items: fullPage(1) })],
+    [envelope({ items: fullPage(1) }), envelope({ items: fullPage(101, 1) })],
     () => behavior.methods.items.execute({ page: 1, pages: 1 }, full.context),
   );
   assertEquals(full.getWrittenResources()[0].data.truncated, true);
@@ -234,6 +235,99 @@ Deno.test("items marks a full last page truncated and honours total_count", asyn
       behavior.methods.items.execute({ page: 1, pages: 1 }, counted.context),
   );
   assertEquals(counted.getWrittenResources()[0].data.truncated, false);
+});
+
+Deno.test("items are truncated exactly when rows exist past the pages read", async () => {
+  /** 250 items over pages of 100, with or without total_count. */
+  const server = (withTotal: boolean) => (req: Request) => {
+    const page = Number(new URL(req.url).searchParams.get("page"));
+    const first = (page - 1) * 100;
+    const count = Math.max(0, Math.min(100, 250 - first));
+    return envelope({
+      page,
+      items: count === 0 ? [] : fullPage(first + 1, count),
+      ...(withTotal ? { total_count: 250 } : {}),
+    });
+  };
+  const cases: {
+    name: string;
+    withTotal: boolean;
+    page: number;
+    pages: number;
+    count: number;
+    truncated: boolean;
+  }[] = [
+    {
+      name: "the last page alone, with a total",
+      withTotal: true,
+      page: 3,
+      pages: 1,
+      count: 50,
+      truncated: false,
+    },
+    {
+      name: "a middle page, with a total",
+      withTotal: true,
+      page: 2,
+      pages: 1,
+      count: 100,
+      truncated: true,
+    },
+    {
+      name: "pages 2 to 3 of 3, with a total",
+      withTotal: true,
+      page: 2,
+      pages: 2,
+      count: 150,
+      truncated: false,
+    },
+    {
+      name: "a full page with rows after, no total",
+      withTotal: false,
+      page: 1,
+      pages: 2,
+      count: 200,
+      truncated: true,
+    },
+    {
+      name: "the last page alone, no total",
+      withTotal: false,
+      page: 3,
+      pages: 1,
+      count: 50,
+      truncated: false,
+    },
+  ];
+  for (const c of cases) {
+    const { context, getWrittenResources } = testContext();
+    await withMockedFetch(
+      server(c.withTotal),
+      () =>
+        behavior.methods.items.execute(
+          { page: c.page, pages: c.pages },
+          context,
+        ),
+    );
+    const [items, summary] = getWrittenResources();
+    assertEquals(items.data.count, c.count, c.name);
+    assertEquals(items.data.truncated, c.truncated, c.name);
+    assertEquals(summary.data.truncated, c.truncated, c.name);
+  }
+
+  // 200 items fill pages 1 and 2 exactly; only the empty page 3 says so.
+  const exact = testContext();
+  const { calls } = await withMockedFetch(
+    [
+      envelope({ items: fullPage(1) }),
+      envelope({ items: fullPage(101) }),
+      envelope({ items: [] }),
+    ],
+    () => behavior.methods.items.execute({ page: 1, pages: 2 }, exact.context),
+  );
+  assertEquals(calls.length, 3, "one request past the pages read");
+  assertEquals(new URL(calls[2].url).searchParams.get("page"), "3");
+  assertEquals(exact.getWrittenResources()[0].data.count, 200);
+  assertEquals(exact.getWrittenResources()[0].data.truncated, false);
 });
 
 Deno.test("items writes nothing when the API refuses", async () => {
@@ -412,10 +506,14 @@ Deno.test("occurrences keep triage fields only and never the payload", async () 
       ),
   );
 
-  assertEquals(calls.length, 2);
+  assertEquals(calls.length, 3, "a full page asks for the next one");
   assertEquals(
     calls[1].url,
     `${HOST}/api/1/item/1042/instances/?page=2&limit=3`,
+  );
+  assertEquals(
+    calls[2].url,
+    `${HOST}/api/1/item/1042/instances/?page=3&limit=3`,
   );
 
   const written = getWrittenResources();
@@ -427,7 +525,7 @@ Deno.test("occurrences keep triage fields only and never the payload", async () 
   assertEquals(
     data.truncated,
     true,
-    "three rows at limit three: more may exist",
+    "three rows at limit three, and page 3 holds rows",
   );
   const rows = data.occurrences as Record<string, unknown>[];
   assertEquals(rows[0], {
@@ -446,6 +544,117 @@ Deno.test("occurrences keep triage fields only and never the payload", async () 
   assertFalse(serialized.includes("person"));
   assertFalse(serialized.includes("7656119"));
   assertFalse(serialized.includes("frames"));
+});
+
+/**
+ * A fake instances route over `total` occurrences of item #42 that answers
+ * `pageSize` rows per page when given, Rollbar's fixed 20, or the request's
+ * `limit` when not, as crashq does.
+ */
+function occurrenceServer(
+  total: number,
+  pageSize?: number,
+): (req: Request) => Response {
+  return (req) => {
+    const url = new URL(req.url);
+    if (url.pathname.endsWith("/item_by_counter/42")) {
+      return envelope(rawItem(42, "error"));
+    }
+    const page = Number(url.searchParams.get("page"));
+    const size = pageSize ?? Number(url.searchParams.get("limit"));
+    const first = (page - 1) * size;
+    const count = Math.max(0, Math.min(size, total - first));
+    return envelope({
+      page,
+      instances: Array.from({ length: count }, (_, i) => ({
+        id: 9000 + first + i,
+        timestamp: 1_700_000_000 + first + i,
+      })),
+    });
+  };
+}
+
+Deno.test("occurrences are truncated exactly when another page holds rows", async () => {
+  const cases: {
+    name: string;
+    total: number;
+    pageSize?: number;
+    limit: number;
+    page: number;
+    count: number;
+    truncated: boolean;
+  }[] = [
+    {
+      name: "crashq, 30 of 30 at limit 50",
+      total: 30,
+      limit: 50,
+      page: 1,
+      count: 30,
+      truncated: false,
+    },
+    {
+      name: "crashq, last full page at limit 50",
+      total: 100,
+      limit: 50,
+      page: 2,
+      count: 50,
+      truncated: false,
+    },
+    {
+      name: "crashq, full page with more after",
+      total: 101,
+      limit: 50,
+      page: 2,
+      count: 50,
+      truncated: true,
+    },
+    {
+      name: "Rollbar, 20 of 45 at limit 50",
+      total: 45,
+      pageSize: 20,
+      limit: 50,
+      page: 1,
+      count: 20,
+      truncated: true,
+    },
+    {
+      name: "Rollbar, last full page at limit 50",
+      total: 40,
+      pageSize: 20,
+      limit: 50,
+      page: 2,
+      count: 20,
+      truncated: false,
+    },
+    {
+      name: "Rollbar, short last page",
+      total: 45,
+      pageSize: 20,
+      limit: 50,
+      page: 3,
+      count: 5,
+      truncated: false,
+    },
+  ];
+  for (const c of cases) {
+    const { context, getWrittenResources } = testContext();
+    await withMockedFetch(
+      occurrenceServer(c.total, c.pageSize),
+      () =>
+        behavior.methods.occurrences.execute(
+          { counter: 42, limit: c.limit, page: c.page },
+          context,
+        ),
+    );
+    const data = getWrittenResources()[0].data;
+    assertEquals(data.count, c.count, c.name);
+    assertEquals(data.truncated, c.truncated, c.name);
+    assertEquals(
+      (data.occurrences as unknown[]).length,
+      c.count,
+      `${c.name}: the next page is counted, never kept`,
+    );
+  }
 });
 
 Deno.test("resolve patches status and version, then re-reads the item", async () => {
@@ -606,7 +815,10 @@ Deno.test("deploys lists a page for the environment and marks a full page", asyn
     finish_time: 1_700_000_010 + i,
   }));
   const { calls } = await withMockedFetch(
-    [envelope({ deploys, page: 2 })],
+    [
+      envelope({ deploys, page: 2 }),
+      envelope({ deploys: deploys.slice(0, 1), page: 3 }),
+    ],
     () => behavior.methods.deploys.execute({ page: 2 }, context),
   );
   assertEquals(
@@ -1144,6 +1356,132 @@ Deno.test("normalizeBucket, normalizeTopActive and normalizeEvent handle odd inp
   );
   assertEquals(normalizeEvent({ id: 9 }), { id: 9, type: "unknown" });
   assertThrows(() => normalizeEvent({}), Error, "no id");
+});
+
+Deno.test("resources that keep titles, event text or a query expire like occurrences", () => {
+  const resources = behavior.resources as Record<
+    string,
+    { lifetime: string; garbageCollection: number }
+  >;
+  const { lifetime, garbageCollection } = resources.occurrences;
+  assertEquals([lifetime, garbageCollection], ["30d", 5]);
+  for (
+    const name of [
+      "items",
+      "summary",
+      "item",
+      "top-active",
+      "events",
+      "fingerprint-test",
+    ]
+  ) {
+    assertEquals(
+      [resources[name].lifetime, resources[name].garbageCollection],
+      [lifetime, garbageCollection],
+      name,
+    );
+  }
+});
+
+Deno.test("logs carry counters, levels, statuses and counts, never a title, query or fingerprint", async () => {
+  const secrets = ["alice_1987", "C:\\Users\\alice"];
+  const title = `NullReferenceException in ${secrets[1]}\\save.dat`;
+  const lines: string[] = [];
+  const keep = (logs: { message: string; args: unknown[] }[]) => {
+    for (const log of logs) {
+      lines.push(rendered(log), JSON.stringify(log.args));
+    }
+  };
+
+  const listed = testContext();
+  await withMockedFetch(
+    () => envelope({ items: [rawItem(1, "error", "active", { title })] }),
+    () =>
+      behavior.methods.items.execute(
+        { query: `player:${secrets[0]}`, page: 1, pages: 1 },
+        listed.context,
+      ),
+  );
+  keep(listed.getLogs());
+  assertStringIncludes(
+    listed.getLogs().map(rendered).join("\n"),
+    "query=(given)",
+  );
+
+  const read = testContext();
+  await withMockedFetch(
+    () => envelope(rawItem(42, "error", "active", { title })),
+    () => behavior.methods.item.execute({ counter: 42 }, read.context),
+  );
+  keep(read.getLogs());
+  assertStringIncludes(
+    read.getLogs().map(rendered).join("\n"),
+    "Read item #42 (error, active, 126 occurrences)",
+  );
+
+  const tested = testContext();
+  await withMockedFetch(
+    () =>
+      envelope({
+        rule: 1,
+        fingerprint: `save ${secrets[1]}`,
+        hash: "0123abcd",
+        title,
+        item: { id: 1042, counter: 42 },
+      }),
+    () =>
+      behavior.methods["fingerprint-test"].execute(
+        { projectId: 3, instance: 501 },
+        tested.context,
+      ),
+  );
+  keep(tested.getLogs());
+  assertStringIncludes(
+    tested.getLogs().map(rendered).join("\n"),
+    "Occurrence 501 groups by rule 1 into item #42",
+  );
+
+  for (const line of lines) {
+    for (const secret of secrets) {
+      assertFalse(line.includes(secret), line);
+      assertFalse(line.includes(JSON.stringify(secret).slice(1, -1)), line);
+    }
+  }
+});
+
+Deno.test("deploys are truncated exactly when another page holds rows", async () => {
+  const deploy = (id: number) => ({
+    id,
+    environment: "production",
+    revision: `rev${id}`,
+  });
+  const page = (from: number, count: number) =>
+    Array.from({ length: count }, (_, i) => deploy(from + i));
+
+  const last = testContext();
+  const { calls } = await withMockedFetch(
+    [envelope({ deploys: page(1, 20) }), envelope({ deploys: [] })],
+    () => behavior.methods.deploys.execute({ page: 1 }, last.context),
+  );
+  assertEquals(new URL(calls[1].url).searchParams.get("page"), "2");
+  assertEquals(last.getWrittenResources()[0].data.count, 20);
+  assertEquals(last.getWrittenResources()[0].data.truncated, false);
+
+  const more = testContext();
+  await withMockedFetch(
+    [envelope({ deploys: page(1, 20) }), envelope({ deploys: page(21, 1) })],
+    () => behavior.methods.deploys.execute({ page: 1 }, more.context),
+  );
+  assertEquals(more.getWrittenResources()[0].data.truncated, true);
+  assertEquals(more.getWrittenResources()[0].data.count, 20);
+
+  const short = testContext();
+  const shortRun = await withMockedFetch(
+    [envelope({ deploys: page(1, 7) })],
+    () => behavior.methods.deploys.execute({ page: 1 }, short.context),
+  );
+  assertEquals(shortRun.calls.length, 1, "a short page needs no second look");
+  assertEquals(short.getWrittenResources()[0].data.truncated, false);
 });
 
 Deno.test("the version bump carries a no-op upgrade to the same version", () => {

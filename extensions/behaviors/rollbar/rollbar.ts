@@ -24,7 +24,10 @@ const RETRY_HEADERS = ["X-Rate-Limit-Remaining-Seconds", "Retry-After"];
 const ITEMS_PAGE_SIZE = 100;
 /** Rollbar lists 20 deploys per page. */
 const DEPLOYS_PAGE_SIZE = 20;
-/** Rollbar lists 20 occurrences per page unless a limit is given. */
+/**
+ * Rollbar lists 20 occurrences per page whatever the limit; crashq lists
+ * `limit` per page, up to 5000. The default limit asks for Rollbar's 20.
+ */
 const OCCURRENCES_PAGE_SIZE = 20;
 /** Longest exception message, event value or title a resource keeps. */
 const MESSAGE_LIMIT = 300;
@@ -888,15 +891,16 @@ function compact<T extends Record<string, unknown>>(value: T): T {
 }
 
 /**
- * Renders item filters for a log line, `status=active, query="x"`, or
+ * Renders item filters for a log line, `status=active, query=(given)`, or
  * `(none)`. A logger turns an object into `[object Object]`, so the line
- * carries this string instead. Filters never hold the token.
+ * carries this string instead. Filters never hold the token, and the line
+ * never holds the query's text: a search can name a player or a path.
  */
 export function describeFilters(filters: ItemFilters): string {
   const parts = Object.entries(filters)
     .filter(([, value]) => value !== undefined)
     .map(([key, value]) =>
-      key === "query" ? `${key}=${JSON.stringify(value)}` : `${key}=${value}`
+      key === "query" ? `${key}=(given)` : `${key}=${value}`
     );
   return parts.length === 0 ? "(none)" : parts.join(", ");
 }
@@ -1162,6 +1166,27 @@ function totalCountOf(result: unknown): number | undefined {
   return isRecord(result) ? asInteger(result.total_count) : undefined;
 }
 
+/**
+ * Whether the page after `options.query.page` holds any rows under `key`.
+ * The item, instances and deploys answers carry no total (items may), so a
+ * full page is the last one or not and only the next page tells. The rows it
+ * answers are counted, never kept or logged.
+ */
+async function hasRowsAfter(
+  globalArgs: GlobalArgs,
+  options: RequestOptions,
+  key: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const page = Number(options.query?.page ?? 1);
+  const result = await request(
+    globalArgs,
+    { ...options, query: { ...options.query, page: page + 1 } },
+    signal,
+  );
+  return rowsOf(result, key).length > 0;
+}
+
 function messageOf(parsed: unknown): string | undefined {
   return isRecord(parsed) ? asString(parsed.message) : undefined;
 }
@@ -1320,25 +1345,30 @@ export const behavior = {
   type: "@reset/rollbar",
   version: "2026.10.24.1",
   globalArguments: GlobalArgsSchema,
+  // A resource that keeps an item title (the first exception message), an
+  // exception message, an event's value or comment text, or the items search
+  // query can carry a player's name or path, so it expires after 30 days and
+  // keeps five versions, as occurrences do. Deploys and the two count reports
+  // keep counts, versions and what a developer typed, and are kept.
   resources: {
     items: {
       description: "A page range of items with the filters it was taken with",
       schema: ItemsResourceSchema,
-      lifetime: "infinite",
-      garbageCollection: 20,
+      lifetime: "30d",
+      garbageCollection: 5,
     },
     summary: {
       description: "Counts by level and status over the same items, and the " +
         "active error or critical count, for CEL asserts",
       schema: SummaryResourceSchema,
-      lifetime: "infinite",
-      garbageCollection: 20,
+      lifetime: "30d",
+      garbageCollection: 5,
     },
     item: {
       description: "One item, written by item, resolve, mute and assign",
       schema: ItemResourceSchema,
-      lifetime: "infinite",
-      garbageCollection: 10,
+      lifetime: "30d",
+      garbageCollection: 5,
     },
     occurrences: {
       description: "One page of an item's occurrences: ids, timestamps, " +
@@ -1377,15 +1407,15 @@ export const behavior = {
       description: "The busiest active items of a window with their hourly " +
         "counts: ids, counters, levels and titles, never occurrences",
       schema: TopActiveResourceSchema,
-      lifetime: "infinite",
-      garbageCollection: 60,
+      lifetime: "30d",
+      garbageCollection: 5,
     },
     events: {
       description: "One item's history: status, level, assignee, title and " +
         "version changes and comments",
       schema: EventsResourceSchema,
-      lifetime: "infinite",
-      garbageCollection: 10,
+      lifetime: "30d",
+      garbageCollection: 5,
     },
     "fingerprint-test": {
       description: "What one occurrence groups by: the rule, fingerprint, " +
@@ -1445,9 +1475,22 @@ export const behavior = {
           lastPageFull = rows.length >= ITEMS_PAGE_SIZE;
           if (!lastPageFull) break;
         }
-        const truncated = totalCount === undefined
-          ? lastPageFull
-          : items.length < totalCount;
+        // More rows exist past the last page read: the total says so when
+        // the API gives one (counting the pages before the first one read),
+        // and otherwise a full last page is followed by one more request.
+        const truncated = totalCount !== undefined
+          ? (args.page - 1) * ITEMS_PAGE_SIZE + items.length < totalCount
+          : lastPageFull &&
+            await hasRowsAfter(
+              globalArgs,
+              {
+                method: "GET",
+                path: "/api/1/items/",
+                query: { ...filters, page: args.page + pagesFetched - 1 },
+              },
+              "items",
+              signal,
+            );
         const summary = summarize(items);
         const fetchedAt = new Date().toISOString();
         const itemsHandle = await context.writeResource("items", "items", {
@@ -1505,12 +1548,17 @@ export const behavior = {
             ...item,
           },
         );
-        logger.info("Read item #{counter}: {title} ({level}, {status})", {
-          counter: item.counter,
-          title: item.title,
-          level: item.level,
-          status: item.status,
-        });
+        // The title stays in the resource, not the log: it is the first
+        // exception message and can carry a player's name or path.
+        logger.info(
+          "Read item #{counter} ({level}, {status}, {total} occurrences)",
+          {
+            counter: item.counter,
+            level: item.level,
+            status: item.status,
+            total: item.totalOccurrences,
+          },
+        );
         return { dataHandles: [handle] };
       },
     },
@@ -1534,19 +1582,25 @@ export const behavior = {
             limit: args.limit,
           },
         );
-        const result = await request(
-          globalArgs,
-          {
-            method: "GET",
-            path: `/api/1/item/${item.id}/instances/`,
-            query: { page: args.page, limit: args.limit },
-          },
-          signal,
-        );
+        const instances: RequestOptions = {
+          method: "GET",
+          path: `/api/1/item/${item.id}/instances/`,
+          query: { page: args.page, limit: args.limit },
+        };
+        const result = await request(globalArgs, instances, signal);
         const rows = rowsOf(result, "instances");
         const occurrences = rows.map(normalizeOccurrence);
-        const truncated =
-          rows.length >= Math.min(args.limit, OCCURRENCES_PAGE_SIZE);
+        // A page shorter than the size the server used is the last one:
+        // fewer than both 20 and the limit, or (crashq, which honours the
+        // limit) more than 20 and fewer than the limit. A page of exactly 20
+        // under a larger limit is Rollbar's full page or crashq's last rows,
+        // and a page of exactly the limit may be followed by more, so the
+        // next page decides.
+        const lastPage =
+          rows.length < Math.min(args.limit, OCCURRENCES_PAGE_SIZE) ||
+          (rows.length > OCCURRENCES_PAGE_SIZE && rows.length < args.limit);
+        const truncated = !lastPage &&
+          await hasRowsAfter(globalArgs, instances, "instances", signal);
         const handle = await context.writeResource(
           "occurrences",
           `occurrences-${item.counter}`,
@@ -1681,24 +1735,23 @@ export const behavior = {
             environment: environment ?? "(all)",
           },
         );
-        const result = await request(
-          globalArgs,
-          {
-            method: "GET",
-            path: "/api/1/deploys/",
-            query: { environment, page: args.page },
-          },
-          signal,
-        );
+        const listing: RequestOptions = {
+          method: "GET",
+          path: "/api/1/deploys/",
+          query: { environment, page: args.page },
+        };
+        const result = await request(globalArgs, listing, signal);
         const rows = rowsOf(result, "deploys");
         const deploys = rows.map(normalizeDeploy);
+        const truncated = rows.length >= DEPLOYS_PAGE_SIZE &&
+          await hasRowsAfter(globalArgs, listing, "deploys", signal);
         const handle = await context.writeResource("deploys", "deploys", {
           fetchedAt: new Date().toISOString(),
           host: globalArgs.host,
           ...compact({ environment }),
           page: args.page,
           count: deploys.length,
-          truncated: rows.length >= DEPLOYS_PAGE_SIZE,
+          truncated,
           deploys,
         });
         logger.info("Listed {count} deploys", { count: deploys.length });
@@ -1979,14 +2032,17 @@ export const behavior = {
             title: (asString(result.title) ?? "").slice(0, MESSAGE_LIMIT),
           },
         );
+        // The fingerprint and title stay in the resource, not the log: both
+        // are built from the occurrence and can carry a name or a path.
+        const counter = asInteger(item.counter);
         logger.info(
-          "Occurrence {instance} groups by {grouping} as {fingerprint}",
+          "Occurrence {instance} groups by {grouping} into {item}",
           {
             instance: args.instance,
             grouping: asInteger(result.rule) === undefined
               ? "the default grouping"
               : `rule ${asInteger(result.rule)}`,
-            fingerprint: fingerprint.slice(0, 80),
+            item: counter === undefined ? "no item yet" : `item #${counter}`,
           },
         );
         return { dataHandles: [handle] };
@@ -2015,7 +2071,7 @@ export const behavior = {
     {
       toVersion: "2026.10.24.1",
       description:
-        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; arguments and behavior unchanged",
+        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; expire items, summary, item, top-active and events after 30 days like occurrences; set truncated only when more rows exist; keep titles, queries and fingerprints out of the logs; arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>): Record<
         string,
         unknown

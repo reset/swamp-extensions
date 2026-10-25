@@ -48,10 +48,10 @@ swamp behavior create @reset/rollbar my-game \
 
 Global arguments:
 
-| Argument      | Default                   | Meaning                                                                                                                           |
-| ------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `host`        | `https://api.rollbar.com` | Base URL of the API.                                                                                                              |
-| `token`       | required                  | Project access token, sensitive. `read` lists and reads, `write` resolves, mutes and assigns, `post_server_item` records deploys. |
+| Argument      | Default                   | Meaning                                                                                                                                      |
+| ------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `host`        | `https://api.rollbar.com` | Base URL of the API.                                                                                                                         |
+| `token`       | required                  | Project access token, sensitive. `read` lists and reads, `write` resolves, mutes and assigns, `post_server_item` records deploys.            |
 | `environment` | none                      | Default environment filter for `items`, `deploys` and the three reports, and the default target of `deploy`. A method argument overrides it. |
 
 ## Methods
@@ -67,29 +67,32 @@ swamp behavior run my-game occurrence-counts --arg bucketSize=86400
 swamp behavior run my-game events --arg counter=42
 ```
 
-| Method        | Arguments                                                          | Calls                                                  | Writes                  |
-| ------------- | ------------------------------------------------------------------ | ------------------------------------------------------ | ----------------------- |
-| `items`       | `status`, `level`, `environment`, `query`, `page` (1), `pages` (1) | `GET /api/1/items/`, 100 per page                      | `items`, `summary`      |
-| `item`        | `id` or `counter`                                                  | `GET /api/1/item/{id}` or `/api/1/item_by_counter/{n}` | `item-<counter>`        |
-| `occurrences` | `id` or `counter`, `limit` (20), `page` (1)                        | `GET /api/1/item/{id}/instances/`                      | `occurrences-<counter>` |
-| `resolve`     | `id` or `counter`, `resolvedInVersion`                             | `PATCH /api/1/item/{id}` then a re-read                | `item-<counter>`        |
-| `mute`        | `id` or `counter`                                                  | `PATCH /api/1/item/{id}` then a re-read                | `item-<counter>`        |
-| `assign`      | `id` or `counter`, `assignedUserId`                                | `PATCH /api/1/item/{id}` then a re-read                | `item-<counter>`        |
-| `deploy`      | `revision`, `environment`, `localUsername`, `comment`, `status`    | `POST /api/1/deploy/`                                  | `deploy-<id>`           |
-| `deploys`     | `environment`, `page` (1)                                          | `GET /api/1/deploys/`, 20 per page                     | `deploys`               |
-| `occurrence-counts` | `bucketSize` (86400), `environments`, `minLevel` (error), `maxLevel`, `itemId` | `GET /api/1/reports/occurrence_counts`    | `occurrence-counts`     |
-| `activated-counts` | `buckets` (60), `environments`                              | `GET /api/1/reports/activated_counts`                  | `activated-counts`      |
-| `top-active`  | `hours` (24), `environments`, `byOccurrences` (false)              | `GET /api/1/reports/top_active_items`                  | `top-active`            |
-| `events`      | `id` or `counter`                                                  | `GET /api/1/item/{id}/events`                          | `events-<counter>`      |
-| `fingerprint-test` | `projectId`, `instance`, `rules`, `ignoreClientFingerprint`  | `POST /api/1/project/{id}/fingerprint_rules/test`, crashq only | `fingerprint-test-<instance>` |
+| Method              | Arguments                                                                      | Calls                                                          | Writes                        |
+| ------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------- | ----------------------------- |
+| `items`             | `status`, `level`, `environment`, `query`, `page` (1), `pages` (1)             | `GET /api/1/items/`, 100 per page                              | `items`, `summary`            |
+| `item`              | `id` or `counter`                                                              | `GET /api/1/item/{id}` or `/api/1/item_by_counter/{n}`         | `item-<counter>`              |
+| `occurrences`       | `id` or `counter`, `limit` (20), `page` (1)                                    | `GET /api/1/item/{id}/instances/`                              | `occurrences-<counter>`       |
+| `resolve`           | `id` or `counter`, `resolvedInVersion`                                         | `PATCH /api/1/item/{id}` then a re-read                        | `item-<counter>`              |
+| `mute`              | `id` or `counter`                                                              | `PATCH /api/1/item/{id}` then a re-read                        | `item-<counter>`              |
+| `assign`            | `id` or `counter`, `assignedUserId`                                            | `PATCH /api/1/item/{id}` then a re-read                        | `item-<counter>`              |
+| `deploy`            | `revision`, `environment`, `localUsername`, `comment`, `status`                | `POST /api/1/deploy/`                                          | `deploy-<id>`                 |
+| `deploys`           | `environment`, `page` (1)                                                      | `GET /api/1/deploys/`, 20 per page                             | `deploys`                     |
+| `occurrence-counts` | `bucketSize` (86400), `environments`, `minLevel` (error), `maxLevel`, `itemId` | `GET /api/1/reports/occurrence_counts`                         | `occurrence-counts`           |
+| `activated-counts`  | `buckets` (60), `environments`                                                 | `GET /api/1/reports/activated_counts`                          | `activated-counts`            |
+| `top-active`        | `hours` (24), `environments`, `byOccurrences` (false)                          | `GET /api/1/reports/top_active_items`                          | `top-active`                  |
+| `events`            | `id` or `counter`                                                              | `GET /api/1/item/{id}/events`                                  | `events-<counter>`            |
+| `fingerprint-test`  | `projectId`, `instance`, `rules`, `ignoreClientFingerprint`                    | `POST /api/1/project/{id}/fingerprint_rules/test`, crashq only | `fingerprint-test-<instance>` |
 
 The `summary` resource carries `count`, `byLevel`, `byStatus` and
-`activeErrors`, the number of active items at level error or critical. Each list
-resource carries `truncated: true` when the last page was full, so more rows may
-exist beyond what was fetched.
+`activeErrors`, the number of active items at level error or critical. The
+`items`, `summary`, `occurrences` and `deploys` resources carry `truncated`,
+true exactly when more rows exist beyond those fetched. `items` reads it from
+`total_count` when the API answers one; otherwise, when the last page read is
+full, each of these methods asks for the next page once and counts its rows
+without keeping them.
 
-`environments` is a list; it falls back to the global `environment` and an
-empty list means any environment.
+`environments` is a list; it falls back to the global `environment` and an empty
+list means any environment.
 
 `resolve`, `mute` and `assign` can be repeated without harm. `deploy` cannot:
 each call records one more deploy, so a workflow that may retry the step should
@@ -163,11 +166,11 @@ lifetime total and status when the API reports them.
 value before and after (a comment's text is the value after), and the user or
 occurrence that caused it. Values are cut to 300 characters.
 
-`fingerprint-test` is crashq's own call and answers 404 on Rollbar. It sends
-one occurrence id (`instance`) and, to try unsaved rules, `rules` and
-`ignoreClientFingerprint`, and keeps what the occurrence groups by: the index
-of the rule that held (absent when the default grouping did), the fingerprint,
-its hash, the title, and the id and counter of the item that counts it, when one
+`fingerprint-test` is crashq's own call and answers 404 on Rollbar. It sends one
+occurrence id (`instance`) and, to try unsaved rules, `rules` and
+`ignoreClientFingerprint`, and keeps what the occurrence groups by: the index of
+the rule that held (absent when the default grouping did), the fingerprint, its
+hash, the title, and the id and counter of the item that counts it, when one
 does. The occurrence itself stays on the server. A `read` token may call it.
 
 ## Errors and rate limits
@@ -179,16 +182,29 @@ throws with `retryAfterSeconds` read from `X-Rate-Limit-Remaining-Seconds` or
 `Retry-After`, and the message says how long to wait. Nothing is written before
 a method fails, so a failed step leaves no misleading data behind.
 
-## What the occurrence resource keeps
+## What each resource keeps, and for how long
 
-Crash occurrences are data about the player who hit the crash. The `occurrences`
-resource keeps the occurrence id, timestamp, environment, code version, level,
-and the exception class and message (cut to 300 characters). It never stores the
-payload: no person block, no custom fields, no frames, no request or server
-data. The resource expires after 30 days and keeps five versions. Items,
-deploys, reports and events hold no player data: the report resources keep
-counts, bucket timestamps, item ids, counters, levels and titles, and
-`fingerprint-test` keeps the rule, fingerprint, hash and title.
+Crash occurrences are data about the player who hit the crash, and text built
+from them can name that player: an item's title is its first exception message,
+which can hold a player name or a user path, and an event can carry a title
+change or a comment. No resource stores an occurrence's payload: no person
+block, no custom fields, no frames, no request or server data. Swamp removes an
+expired version, and versions beyond the count kept, when `swamp data gc` runs.
+
+| Resource                                | Keeps                                                                                                                                                                      | Expires after | Versions kept |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------- |
+| `occurrences`                           | each occurrence's id, timestamp, environment, code version, level, and exception class and message (cut to 300 characters)                                                 | 30 days       | 5             |
+| `items`, `item`                         | each item's id, counter, title, level, status, environment, occurrence counts and times, versions and assignee id; `items` also its filters, the search `query` among them | 30 days       | 5             |
+| `summary`                               | counts by level and status, the active error count, and the same filters as `items`, `query` among them                                                                    | 30 days       | 5             |
+| `top-active`                            | each item's id, counter, title, level, environment, hourly counts, and status and totals when the API reports them                                                         | 30 days       | 5             |
+| `events`                                | each event's type, the values before and after, each cut to 300 characters (a comment's text is the value after), and the user or occurrence that caused it                | 30 days       | 5             |
+| `fingerprint-test`                      | the rule index, fingerprint, hash, title, and the counting item's id and counter                                                                                           | 30 days       | 5             |
+| `deploy`, `deploys`                     | deploy ids, environment, revision, status, times, and the local username and comment the deploy was recorded with                                                          | never         | 20, 10        |
+| `occurrence-counts`, `activated-counts` | bucket timestamps and counts, the environments, levels and item id asked for                                                                                               | never         | 60            |
+
+Deploys and the count reports hold no player data, so they are kept. Log lines
+name counters, levels, statuses and counts, never a title, a query's text or a
+fingerprint.
 
 ## What is left out, and why
 
@@ -220,8 +236,8 @@ are Rollbar's (its reference documents `bucket_size`, `environments`,
 - `activated_counts`: Rollbar buckets days in the project's timezone, crashq in
   UTC. Rollbar also takes `bucket_size`, which only accepts 86400, so it is not
   sent.
-- `GET /api/1/item/{id}/events` is not in Rollbar's public reference; on
-  crashq it answers the item's events, comments among them.
+- `GET /api/1/item/{id}/events` is not in Rollbar's public reference; on crashq
+  it answers the item's events, comments among them.
 - `POST /api/1/project/{id}/fingerprint_rules/test` is crashq only.
 
 ## License

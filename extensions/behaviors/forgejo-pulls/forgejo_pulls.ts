@@ -25,6 +25,14 @@ const STATUS_PAGES = 10;
 /** Longest status description a resource keeps. */
 const DESCRIPTION_LIMIT = 200;
 
+/**
+ * An owner or repository name as Forgejo allows it: letters, digits, `-`, `_`
+ * and `.`, never `.` or `..` alone. It goes into the request path as written,
+ * so nothing that could move the request (and its token) to another route
+ * gets through.
+ */
+const NAME_PATTERN = /^(?!\.\.?$)[\w.-]+$/;
+
 const PULL_STATES = ["open", "closed", "all"] as const;
 const ASKS = ["merge", "rush", "none"] as const;
 
@@ -291,10 +299,12 @@ const GlobalArgsSchema = z.object({
     ),
   owner: z.string()
     .min(1)
+    .regex(NAME_PATTERN)
     .optional()
     .describe("Default repository owner. A method argument overrides it."),
   repo: z.string()
     .min(1)
+    .regex(NAME_PATTERN)
     .optional()
     .describe("Default repository name. A method argument overrides it."),
   accessClientId: z.string()
@@ -323,10 +333,12 @@ const GlobalArgsSchema = z.object({
 const PullsArgsSchema = z.object({
   owner: z.string()
     .min(1)
+    .regex(NAME_PATTERN)
     .optional()
     .describe("Repository owner. Falls back to the global owner."),
   repo: z.string()
     .min(1)
+    .regex(NAME_PATTERN)
     .optional()
     .describe("Repository name. Falls back to the global repo."),
   state: z.enum(PULL_STATES)
@@ -348,10 +360,12 @@ const PullsArgsSchema = z.object({
 const PullArgsSchema = z.object({
   owner: z.string()
     .min(1)
+    .regex(NAME_PATTERN)
     .optional()
     .describe("Repository owner. Falls back to the global owner."),
   repo: z.string()
     .min(1)
+    .regex(NAME_PATTERN)
     .optional()
     .describe("Repository name. Falls back to the global repo."),
   number: z.number()
@@ -363,10 +377,12 @@ const PullArgsSchema = z.object({
 const StatusesArgsSchema = z.object({
   owner: z.string()
     .min(1)
+    .regex(NAME_PATTERN)
     .optional()
     .describe("Repository owner. Falls back to the global owner."),
   repo: z.string()
     .min(1)
+    .regex(NAME_PATTERN)
     .optional()
     .describe("Repository name. Falls back to the global repo."),
   number: z.number()
@@ -394,10 +410,12 @@ const StatusesArgsSchema = z.object({
 const CommentArgsSchema = z.object({
   owner: z.string()
     .min(1)
+    .regex(NAME_PATTERN)
     .optional()
     .describe("Repository owner. Falls back to the global owner."),
   repo: z.string()
     .min(1)
+    .regex(NAME_PATTERN)
     .optional()
     .describe("Repository name. Falls back to the global repo."),
   number: z.number()
@@ -669,6 +687,19 @@ function totalCountOf(headers: Headers): number | undefined {
   return asInteger(headers.get("X-Total-Count"));
 }
 
+/**
+ * Whether the answer's Link header offers a next page, or undefined without a
+ * Link header. Forgejo offers one exactly while rows lie beyond this page,
+ * counted in the page size it served, which a site may cap below 50.
+ */
+function hasNextLink(headers: Headers): boolean | undefined {
+  const link = headers.get("Link");
+  if (link === null) return undefined;
+  return link.split(",").some((part) =>
+    /;\s*rel="?next"?(\s*;|\s*$)/.test(part)
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Transport
 // ---------------------------------------------------------------------------
@@ -785,6 +816,15 @@ export function repoOf(
     throw new Error(
       "the method needs a repository: pass owner and repo, or set them as global arguments",
     );
+  }
+  for (const [field, value] of [["owner", owner], ["repo", repo]]) {
+    if (!NAME_PATTERN.test(value)) {
+      throw new Error(
+        `${field} ${
+          JSON.stringify(value)
+        } is not a Forgejo name: letters, digits, -, _ and . only, and not . or ..`,
+      );
+    }
   }
   return { owner, repo };
 }
@@ -1009,8 +1049,7 @@ export const behavior = {
           },
         );
         const pulls: Pull[] = [];
-        let totalCount: number | undefined;
-        let lastPageFull = false;
+        let more = false;
         let pagesFetched = 0;
         for (let page = args.page; page < args.page + args.pages; page++) {
           const answer = await request(
@@ -1023,23 +1062,26 @@ export const behavior = {
             signal,
           );
           const rows = Array.isArray(answer.data) ? answer.data : [];
-          totalCount = totalCountOf(answer.headers) ?? totalCount;
           pagesFetched++;
           for (const row of rows) pulls.push(normalizePull(row, globalArgs));
           logger.debug("Page {page}: {count} pull requests", {
             page,
             count: rows.length,
           });
-          lastPageFull = rows.length >= PAGE_SIZE;
-          // A site may cap pages below 50: the count, when given, decides.
-          const more = rows.length > 0 && totalCount !== undefined
-            ? pulls.length < totalCount
-            : lastPageFull;
+          // Whether rows lie beyond this page. X-Total-Count counts every
+          // page, not those from args.page on, so it is compared with this
+          // page's last row. The Link header, when sent, decides first: it
+          // counts in the page size the site served, which may be below 50.
+          const totalCount = totalCountOf(answer.headers);
+          const end = (page - 1) * PAGE_SIZE + rows.length;
+          more = rows.length > 0 &&
+            (hasNextLink(answer.headers) ??
+              (totalCount === undefined
+                ? rows.length >= PAGE_SIZE
+                : end < totalCount));
           if (!more) break;
         }
-        const truncated = totalCount === undefined
-          ? lastPageFull
-          : pulls.length < totalCount;
+        const truncated = more;
         const handle = await context.writeResource(
           "pulls",
           `pulls-${owner}-${repo}`,
@@ -1152,7 +1194,9 @@ export const behavior = {
             ? combined.statuses
             : [];
           state ??= asString(combined.state);
-          totalCount = asInteger(combined.total_count) ?? totalCount;
+          // The body's total_count counts this page's rows only; the header
+          // counts every context (Forgejo routers/api/v1/repo/status.go).
+          totalCount = totalCountOf(answer.headers) ?? totalCount;
           pagesFetched++;
           for (const row of rows) statuses.push(normalizeStatus(row));
           logger.debug("Page {page}: {count} statuses", {
@@ -1314,7 +1358,7 @@ export const behavior = {
     {
       toVersion: "2026.10.24.1",
       description:
-        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; arguments and behavior unchanged",
+        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; refuse an owner or repo that is not a Forgejo name; pulls marks a later page truncated only when rows lie beyond it, and statuses reads every page of contexts. Stored attributes carry over unchanged",
       upgradeAttributes: (old: Record<string, unknown>): Record<
         string,
         unknown

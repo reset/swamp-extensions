@@ -8,6 +8,7 @@ globalArguments:
   host: '${{ vault.get(default, buildq-host) }}'
   owner: reset
   repo: swamp-extensions
+  apiToken: '${{ vault.get(default, buildq-api-token) }}'
   accessClientId: '${{ vault.get(default, buildq-access-client-id) }}'
   accessClientSecret: '${{ vault.get(default, buildq-access-client-secret) }}'
 methods: {}
