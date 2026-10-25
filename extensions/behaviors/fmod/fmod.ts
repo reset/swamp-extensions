@@ -122,18 +122,15 @@ const GlobalArgsSchema = z.object({
   project: z.string().min(1).regex(
     /\.fspro$/i,
     "an FMOD Studio project is a .fspro file",
-  ).meta({
-    description:
-      "Path of the FMOD Studio project (.fspro), absolute or relative to the repository",
-  }),
-  fmodstudio: z.string().min(1).default("fmodstudiocl").meta({
-    description:
-      "The command line tool: its command name when it is on PATH, a path to it, or on macOS the path of the FMOD Studio app bundle (see the README)",
-  }),
-  timeoutSeconds: z.number().int().positive().default(1800).meta({
-    description:
-      "Kill FMOD Studio and fail when it has not exited after this many seconds",
-  }),
+  ).describe(
+    "Path of the FMOD Studio project (.fspro), absolute or relative to the repository",
+  ),
+  fmodstudio: z.string().min(1).default("fmodstudiocl").describe(
+    "The command line tool: its command name when it is on PATH, a path to it, or on macOS the path of the FMOD Studio app bundle (see the README)",
+  ),
+  timeoutSeconds: z.number().int().positive().default(1800).describe(
+    "Kill FMOD Studio and fail when it has not exited after this many seconds",
+  ),
 });
 
 /** Global arguments of a behavior instance, as validated by swamp. */
@@ -150,38 +147,30 @@ const _GlobalArgsMatch: Same<z.infer<typeof GlobalArgsSchema>, GlobalArgs> =
   true;
 
 const BuildArgsSchema = z.object({
-  banks: z.array(NameSchema).default([]).meta({
-    description:
-      "Banks to build, by name as the banks browser shows them. Empty builds every bank",
-  }),
-  platforms: z.array(NameSchema).default([]).meta({
-    description:
-      "Platforms to build for, by the names in the project's build preferences. Empty builds every platform",
-  }),
-  ignoreWarnings: z.boolean().default(false).meta({
-    description:
-      "Continue the build when FMOD Studio reports warnings (-ignore-warnings)",
-  }),
-  exportGuids: z.boolean().default(false).meta({
-    description:
-      "Export event and mixer GUIDs to text files beside the project (-export-guids)",
-  }),
-  sharedAudioSourceDir: z
-    .string()
+  banks: z.array(NameSchema).default([]).describe(
+    "Banks to build, by name as the banks browser shows them. Empty builds every bank",
+  ),
+  platforms: z.array(NameSchema).default([]).describe(
+    "Platforms to build for, by the names in the project's build preferences. Empty builds every platform",
+  ),
+  ignoreWarnings: z.boolean().default(false).describe(
+    "Continue the build when FMOD Studio reports warnings (-ignore-warnings)",
+  ),
+  exportGuids: z.boolean().default(false).describe(
+    "Export event and mixer GUIDs to text files beside the project (-export-guids)",
+  ),
+  sharedAudioSourceDir: z.string()
     .min(1)
-    .meta({
-      description:
-        "Directory that replaces the project's assets folder for this build (-shared-audio-source-dir), absolute or relative to the repository",
-    })
-    .optional(),
-  logDir: z
-    .string()
+    .optional()
+    .describe(
+      "Directory that replaces the project's assets folder for this build (-shared-audio-source-dir), absolute or relative to the repository",
+    ),
+  logDir: z.string()
     .min(1)
-    .meta({
-      description:
-        "Directory FMOD Studio writes its own log file to (-log-dir), absolute or relative to the repository",
-    })
-    .optional(),
+    .optional()
+    .describe(
+      "Directory FMOD Studio writes its own log file to (-log-dir), absolute or relative to the repository",
+    ),
 });
 
 /** Arguments of the `build` method. */
@@ -833,7 +822,7 @@ async function runStudio(
 /** The FMOD Studio behavior. */
 export const behavior = {
   type: "@reset/fmod",
-  version: "2026.10.20.1",
+  version: "2026.10.24.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     build: {
@@ -1117,4 +1106,15 @@ export const behavior = {
       },
     },
   },
+  upgrades: [
+    {
+      toVersion: "2026.10.24.1",
+      description:
+        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; arguments and behavior unchanged",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+  ],
 };

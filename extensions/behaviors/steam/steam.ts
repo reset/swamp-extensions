@@ -49,39 +49,32 @@ const INTERESTING_LINE = new RegExp(
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 
 const GlobalArgsSchema = z.object({
-  appId: z.number().int().positive().meta({
-    description: "Steam application id (the AppID the build belongs to)",
-  }),
-  steamcmd: z.string().min(1).default("steamcmd").meta({
-    description: "Path to steamcmd, or its command name when it is on PATH",
-  }),
-  username: z.string().min(1).meta({
-    description: "Steam account used for builds (upload only)",
-  }),
-  password: z
-    .string()
+  appId: z.number().int().positive().describe(
+    "Steam application id (the AppID the build belongs to)",
+  ),
+  steamcmd: z.string().min(1).default("steamcmd").describe(
+    "Path to steamcmd, or its command name when it is on PATH",
+  ),
+  username: z.string().min(1).describe(
+    "Steam account used for builds (upload only)",
+  ),
+  password: z.string()
     .min(1)
     .meta({ sensitive: true })
-    .describe(
+    .optional().describe(
       "Password of the build account. Omit when steamcmd on this machine already holds a cached login for the account",
-    )
-    .optional(),
-  webApiKey: z
-    .string()
+    ),
+  webApiKey: z.string()
     .min(1)
     .meta({ sensitive: true })
-    .describe(
+    .optional().describe(
       "Publisher Web API key of the Steamworks group that owns the app, used by builds, betas and setLive",
-    )
-    .optional(),
-  contentRoot: z
-    .string()
+    ),
+  contentRoot: z.string()
     .min(1)
-    .meta({
-      description:
-        "Directory holding the depot content a generated app build script uploads from (upload without a supplied vdf)",
-    })
-    .optional(),
+    .optional().describe(
+      "Directory holding the depot content a generated app build script uploads from (upload without a supplied vdf)",
+    ),
 });
 
 /** Global arguments of a behavior instance, as validated by swamp. */
@@ -106,20 +99,18 @@ const _GlobalArgsMatch: Same<
 > = true;
 
 const DepotMappingSchema = z.object({
-  localPath: z.string().min(1).default("*").meta({
-    description:
-      "File pattern under contentRoot to upload (steamcmd LocalPath)",
-  }),
-  depotPath: z.string().min(1).default(".").meta({
-    description:
-      "Directory inside the depot to place the files in (steamcmd DepotPath)",
-  }),
-  recursive: z.boolean().default(true).meta({
-    description: "Whether localPath matches recursively",
-  }),
-  exclusions: z.array(z.string().min(1)).default([]).meta({
-    description: "File patterns to leave out (steamcmd FileExclusion)",
-  }),
+  localPath: z.string().min(1).default("*").describe(
+    "File pattern under contentRoot to upload (steamcmd LocalPath)",
+  ),
+  depotPath: z.string().min(1).default(".").describe(
+    "Directory inside the depot to place the files in (steamcmd DepotPath)",
+  ),
+  recursive: z.boolean().default(true).describe(
+    "Whether localPath matches recursively",
+  ),
+  exclusions: z.array(z.string().min(1)).default([]).describe(
+    "File patterns to leave out (steamcmd FileExclusion)",
+  ),
 });
 
 /** One depot's file mapping in a generated app build script. */
@@ -140,64 +131,45 @@ const _DepotMappingMatch: Same<
 > = true;
 
 const UploadArgsSchema = z.object({
-  vdf: z
-    .string()
+  vdf: z.string()
     .min(1)
-    .meta({
-      description:
-        "Path of an existing app build script to run as it is. When set, description, depots and setLive are ignored",
-    })
-    .optional(),
-  description: z
-    .string()
+    .optional().describe(
+      "Path of an existing app build script to run as it is. When set, description, depots and setLive are ignored",
+    ),
+  description: z.string()
     .min(1)
     .max(200)
-    .meta({
-      description:
-        "Build description shown in Steamworks (generated script only)",
-    })
-    .optional(),
-  depots: z
-    .record(
-      z.string().regex(/^\d+$/, "a depot id is a number"),
-      z.union([z.string().min(1), DepotMappingSchema]),
-    )
-    .meta({
-      description:
-        "Depot id to file mapping for the generated script: a localPath pattern, or an object with localPath, depotPath, recursive and exclusions",
-    })
-    .optional(),
-  setLive: z
-    .string()
+    .optional().describe(
+      "Build description shown in Steamworks (generated script only)",
+    ),
+  depots: z.record(
+    z.string().regex(/^\d+$/, "a depot id is a number"),
+    z.union([z.string().min(1), DepotMappingSchema]),
+  )
+    .optional().describe(
+      "Depot id to file mapping for the generated script: a localPath pattern, or an object with localPath, depotPath, recursive and exclusions",
+    ),
+  setLive: z.string()
     .min(1)
-    .meta({
-      description:
-        "Branch the generated script sets live right after the upload. Leave unset to upload only (the default branch cannot be set this way)",
-    })
-    .optional(),
-  buildOutput: z
-    .string()
+    .optional().describe(
+      "Branch the generated script sets live right after the upload. Leave unset to upload only (the default branch cannot be set this way)",
+    ),
+  buildOutput: z.string()
     .min(1)
-    .meta({
-      description:
-        "Directory steamcmd writes its build logs and chunk cache to. Defaults to .swamp/steam/build-output/<appId> under the repository",
-    })
-    .optional(),
-  preview: z.boolean().default(false).meta({
-    description: "Build the depot locally without uploading (steamcmd Preview)",
-  }),
-  steamGuardCode: z
-    .string()
+    .optional().describe(
+      "Directory steamcmd writes its build logs and chunk cache to. Defaults to .swamp/steam/build-output/<appId> under the repository",
+    ),
+  preview: z.boolean().default(false).describe(
+    "Build the depot locally without uploading (steamcmd Preview)",
+  ),
+  steamGuardCode: z.string()
     .regex(/^[A-Za-z0-9]{5}$/, "a Steam Guard code is five characters")
-    .meta({
-      description:
-        "A Steam Guard code for this one login, passed as +set_steam_guard_code. Needed on a machine with no cached login",
-    })
-    .optional(),
-  timeoutSeconds: z.number().int().positive().default(3600).meta({
-    description:
-      "Kill steamcmd and fail when it has not exited after this many seconds",
-  }),
+    .optional().describe(
+      "A Steam Guard code for this one login, passed as +set_steam_guard_code. Needed on a machine with no cached login",
+    ),
+  timeoutSeconds: z.number().int().positive().default(3600).describe(
+    "Kill steamcmd and fail when it has not exited after this many seconds",
+  ),
 });
 
 /** Arguments of the `upload` method. */
@@ -226,9 +198,9 @@ const _UploadArgsMatch: Same<
 > = true;
 
 const BuildsArgsSchema = z.object({
-  count: z.number().int().positive().max(1000).default(50).meta({
-    description: "How many of the newest builds to read",
-  }),
+  count: z.number().int().positive().max(1000).default(50).describe(
+    "How many of the newest builds to read",
+  ),
 });
 
 /** Arguments of the `builds` method. */
@@ -243,29 +215,21 @@ const _BuildsArgsMatch: Same<
 > = true;
 
 const SetLiveArgsSchema = z.object({
-  buildId: z.number().int().positive().meta({
-    description: "The BuildID to set live, as reported by upload or builds",
-  }),
-  branch: z.string().min(1).default("public").meta({
-    description:
-      "Branch name (betakey). 'public' is the default branch players get",
-  }),
-  description: z
-    .string()
+  buildId: z.number().int().positive().describe(
+    "The BuildID to set live, as reported by upload or builds",
+  ),
+  branch: z.string().min(1).default("public").describe(
+    "Branch name (betakey). 'public' is the default branch players get",
+  ),
+  description: z.string()
     .min(1)
     .max(200)
-    .meta({
-      description: "Note recorded with the change in Steamworks",
-    })
-    .optional(),
-  approverSteamId: z
-    .string()
+    .optional().describe("Note recorded with the change in Steamworks"),
+  approverSteamId: z.string()
     .regex(/^\d{17}$/, "a SteamID64 is 17 digits")
-    .meta({
-      description:
-        "SteamID64 of the account that confirms the change in the Steam mobile app when the app requires that for the default branch",
-    })
-    .optional(),
+    .optional().describe(
+      "SteamID64 of the account that confirms the change in the Steam mobile app when the app requires that for the default branch",
+    ),
 });
 
 /** Arguments of the `setLive` method. */
@@ -329,11 +293,10 @@ const ReleaseResourceSchema = z.object({
   description: z.string().optional(),
   at: z.string(),
   alreadyLive: z.boolean(),
-  response: z
-    .object({
-      result: z.number().int(),
-      message: z.string(),
-    })
+  response: z.object({
+    result: z.number().int(),
+    message: z.string(),
+  })
     .nullable(),
 });
 
@@ -864,7 +827,7 @@ function requireWebApiKey(globalArgs: GlobalArgs, method: string): string {
 /** The Steam publishing behavior. */
 export const behavior = {
   type: "@reset/steam",
-  version: "2026.10.20.1",
+  version: "2026.10.24.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     upload: {
@@ -1272,4 +1235,15 @@ export const behavior = {
       },
     },
   },
+  upgrades: [
+    {
+      toVersion: "2026.10.24.1",
+      description:
+        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; arguments and behavior unchanged",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+  ],
 };

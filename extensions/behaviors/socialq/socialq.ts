@@ -432,20 +432,17 @@ export class SocialqError extends Error {
 // ---------------------------------------------------------------------------
 
 const GlobalArgsSchema = z.object({
-  host: z
-    .url()
+  host: z.url()
     .describe(
       "Origin of the deployment (https://socialq.example.com) or an organization's own host.",
     ),
-  clientId: z
-    .string()
+  clientId: z.string()
     .min(1)
     .meta({ sensitive: true })
     .describe(
       "Client id of the Cloudflare Access service token, sent as CF-Access-Client-Id.",
     ),
-  clientSecret: z
-    .string()
+  clientSecret: z.string()
     .min(1)
     .meta({ sensitive: true })
     .describe(
@@ -455,28 +452,26 @@ const GlobalArgsSchema = z.object({
 
 const EmptyArgsSchema = z.object({});
 
-const DaySchema = z
-  .string()
-  .regex(DAY_PATTERN, "a day is YYYY-MM-DD");
-
 const RangeArgsSchema = z.object({
-  from: DaySchema.optional().describe(
-    "First day, YYYY-MM-DD. Defaults to 30 days before to.",
-  ),
-  to: DaySchema.optional().describe(
-    "Last day, YYYY-MM-DD, inclusive. Defaults to today, UTC.",
-  ),
+  from: z.string()
+    .regex(DAY_PATTERN, "a day is YYYY-MM-DD")
+    .optional()
+    .describe("First day, YYYY-MM-DD. Defaults to 30 days before to."),
+  to: z.string()
+    .regex(DAY_PATTERN, "a day is YYYY-MM-DD")
+    .optional()
+    .describe(
+      "Last day, YYYY-MM-DD, inclusive. Defaults to today, UTC.",
+    ),
 }) satisfies z.ZodType<RangeArgs>;
 
 const JobsArgsSchema = z.object({
-  state: z
-    .string()
+  state: z.string()
     .default(DEFAULT_JOB_STATES)
     .describe(
       "Job states to list, comma separated: due, leased, done, failed, unknown, dead.",
     ),
-  limit: z
-    .number()
+  limit: z.number()
     .int()
     .min(1)
     .max(JOBS_MAX_LIMIT)
@@ -485,8 +480,7 @@ const JobsArgsSchema = z.object({
 }) satisfies z.ZodType<JobsArgs>;
 
 const TaxonomyArgsSchema = z.object({
-  archived: z
-    .boolean()
+  archived: z.boolean()
     .default(false)
     .describe("Include archived collections and tags."),
 }) satisfies z.ZodType<TaxonomyArgs>;
@@ -654,12 +648,11 @@ const ActivityJobSchema = z.object({
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
   nextRunAt: z.string().optional(),
-  run: z
-    .object({
-      status: z.string(),
-      items: z.number().int(),
-      endedAt: z.string().optional(),
-    })
+  run: z.object({
+    status: z.string(),
+    items: z.number().int(),
+    endedAt: z.string().optional(),
+  })
     .optional(),
 }) satisfies z.ZodType<ActivityJob>;
 
@@ -1257,7 +1250,7 @@ export const behavior = {
   // String literals, not constants: the registry catalog reads them from the
   // source.
   type: "@reset/socialq",
-  version: "2026.10.21.1",
+  version: "2026.10.24.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     health: {
@@ -1665,6 +1658,17 @@ export const behavior = {
       },
     },
   },
+  upgrades: [
+    {
+      toVersion: "2026.10.24.1",
+      description:
+        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; arguments and behavior unchanged",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+  ],
 };
 
 /** The account statuses socialq documents, for callers that count them. */

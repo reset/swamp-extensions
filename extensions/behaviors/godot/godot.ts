@@ -46,18 +46,15 @@ const INTERESTING_LINE =
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 
 const GlobalArgsSchema = z.object({
-  projectPath: z.string().min(1).meta({
-    description:
-      "Directory holding the project's project.godot, absolute or relative to the repository",
-  }),
-  godot: z.string().min(1).default("godot").meta({
-    description:
-      "Path to the Godot 4 editor binary, or its command name when it is on PATH. Export templates are only found by an editor build",
-  }),
-  timeoutSeconds: z.number().int().positive().default(1800).meta({
-    description:
-      "Kill Godot and fail when one invocation has not exited after this many seconds",
-  }),
+  projectPath: z.string().min(1).describe(
+    "Directory holding the project's project.godot, absolute or relative to the repository",
+  ),
+  godot: z.string().min(1).default("godot").describe(
+    "Path to the Godot 4 editor binary, or its command name when it is on PATH. Export templates are only found by an editor build",
+  ),
+  timeoutSeconds: z.number().int().positive().default(1800).describe(
+    "Kill Godot and fail when one invocation has not exited after this many seconds",
+  ),
 });
 
 /** Global arguments of a behavior instance, as validated by swamp. */
@@ -76,18 +73,15 @@ const _GlobalArgsMatch: Same<
 > = true;
 
 const ExportArgsSchema = z.object({
-  preset: z.string().min(1).meta({
-    description:
-      "Name of an export preset defined in the project's export_presets.cfg",
-  }),
-  path: z.string().min(1).meta({
-    description:
-      "Output file. A relative path is relative to the project directory, as Godot resolves it, not to the working directory",
-  }),
-  mode: z.enum(["release", "debug", "pack"]).default("release").meta({
-    description:
-      "release runs --export-release, debug runs --export-debug (debug template), pack runs --export-pack (PCK or ZIP by the path's extension, no executable)",
-  }),
+  preset: z.string().min(1).describe(
+    "Name of an export preset defined in the project's export_presets.cfg",
+  ),
+  path: z.string().min(1).describe(
+    "Output file. A relative path is relative to the project directory, as Godot resolves it, not to the working directory",
+  ),
+  mode: z.enum(["release", "debug", "pack"]).default("release").describe(
+    "release runs --export-release, debug runs --export-debug (debug template), pack runs --export-pack (PCK or ZIP by the path's extension, no executable)",
+  ),
 });
 
 /** Arguments of the `export` method. */
@@ -106,10 +100,9 @@ const _ExportArgsMatch: Same<
 > = true;
 
 const CheckArgsSchema = z.object({
-  scripts: z.array(z.string().min(1)).min(1).meta({
-    description:
-      "GDScript files to parse, each a resource path relative to the project (player.gd is res://player.gd) or an absolute filesystem path",
-  }),
+  scripts: z.array(z.string().min(1)).min(1).describe(
+    "GDScript files to parse, each a resource path relative to the project (player.gd is res://player.gd) or an absolute filesystem path",
+  ),
 });
 
 /** Arguments of the `check` method. */
@@ -782,7 +775,7 @@ async function readPresets(
 /** The Godot behavior. */
 export const behavior = {
   type: "@reset/godot",
-  version: "2026.10.20.1",
+  version: "2026.10.24.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     version: {
@@ -1231,4 +1224,15 @@ export const behavior = {
       },
     },
   },
+  upgrades: [
+    {
+      toVersion: "2026.10.24.1",
+      description:
+        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; arguments and behavior unchanged",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+  ],
 };

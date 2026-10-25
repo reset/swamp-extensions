@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@reset/workq"
-version: "2026.10.21.1"
+version: "2026.10.24.1"
 license: MIT
 description: |-
   Drive workq's work-tracking API as a service caller: read who you are,

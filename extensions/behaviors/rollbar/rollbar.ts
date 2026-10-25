@@ -432,69 +432,59 @@ export class RollbarError extends Error {
 // ---------------------------------------------------------------------------
 
 const GlobalArgsSchema = z.object({
-  host: z
-    .url()
+  host: z.url()
     .default(DEFAULT_HOST)
     .describe(
       "Base URL of the API: https://api.rollbar.com, or your crashq host.",
     ),
-  token: z
-    .string()
+  token: z.string()
     .min(1)
     .meta({ sensitive: true })
     .describe(
       "Project access token, sent as X-Rollbar-Access-Token. Read scope lists and reads, write resolves, mutes and assigns, post_server_item records deploys.",
     ),
-  environment: z
-    .string()
+  environment: z.string()
     .optional()
     .describe(
       "Default environment filter for items, deploys and reports. A method argument overrides it.",
     ),
 }) satisfies z.ZodType<GlobalArgs>;
 
-const ItemRefShape = {
-  id: z.number().int().positive().optional().describe("The item's id."),
-  counter: z
-    .number()
-    .int()
-    .positive()
-    .optional()
-    .describe("The item's counter, the number the project's UI shows."),
-};
-
 const oneOfIdOrCounter = (value: ItemRef): boolean =>
   (value.id === undefined) !== (value.counter === undefined);
 
 const ITEM_REF_MESSAGE = "Give exactly one of id or counter.";
 
-const ItemRefSchema = z.object(ItemRefShape).refine(oneOfIdOrCounter, {
+const ItemRefSchema = z.object({
+  id: z.number().int().positive().optional().describe("The item's id."),
+  counter: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("The item's counter, the number the project's UI shows."),
+}).refine(oneOfIdOrCounter, {
   message: ITEM_REF_MESSAGE,
 }) satisfies z.ZodType<ItemRef>;
 
 const ItemsArgsSchema = z.object({
   status: z.enum(STATUSES).optional().describe("Only items with this status."),
   level: z.enum(LEVELS).optional().describe("Only items at this level."),
-  environment: z
-    .string()
+  environment: z.string()
     .optional()
     .describe(
       "Only items from this environment. Overrides the global environment.",
     ),
-  query: z
-    .string()
+  query: z.string()
     .optional()
     .describe(
       "Rollbar search query: free text, #counter or field:value terms.",
     ),
-  page: z
-    .number()
+  page: z.number()
     .int()
     .min(1)
     .default(1)
     .describe("First page to fetch, 1-based."),
-  pages: z
-    .number()
+  pages: z.number()
     .int()
     .min(1)
     .max(50)
@@ -502,67 +492,72 @@ const ItemsArgsSchema = z.object({
     .describe("How many pages of 100 items to fetch."),
 }) satisfies z.ZodType<ItemsArgs>;
 
-const OccurrencesArgsSchema = z
-  .object({
-    ...ItemRefShape,
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(5000)
-      .default(OCCURRENCES_PAGE_SIZE)
-      .describe("Occurrences per page, up to 5000 where the API allows it."),
-    page: z
-      .number()
-      .int()
-      .min(1)
-      .default(1)
-      .describe("Page to fetch, 1-based, newest first."),
-  })
+const OccurrencesArgsSchema = z.object({
+  id: z.number().int().positive().optional().describe("The item's id."),
+  counter: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("The item's counter, the number the project's UI shows."),
+  limit: z.number()
+    .int()
+    .min(1)
+    .max(5000)
+    .default(OCCURRENCES_PAGE_SIZE)
+    .describe("Occurrences per page, up to 5000 where the API allows it."),
+  page: z.number()
+    .int()
+    .min(1)
+    .default(1)
+    .describe("Page to fetch, 1-based, newest first."),
+})
   .refine(oneOfIdOrCounter, {
     message: ITEM_REF_MESSAGE,
   }) satisfies z.ZodType<OccurrencesArgs>;
 
-const ResolveArgsSchema = z
-  .object({
-    ...ItemRefShape,
-    resolvedInVersion: z
-      .string()
-      .optional()
-      .describe(
-        "The version that carries the fix. The item reopens on a later version.",
-      ),
-  })
+const ResolveArgsSchema = z.object({
+  id: z.number().int().positive().optional().describe("The item's id."),
+  counter: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("The item's counter, the number the project's UI shows."),
+  resolvedInVersion: z.string()
+    .optional()
+    .describe(
+      "The version that carries the fix. The item reopens on a later version.",
+    ),
+})
   .refine(oneOfIdOrCounter, {
     message: ITEM_REF_MESSAGE,
   }) satisfies z.ZodType<ResolveArgs>;
 
-const AssignArgsSchema = z
-  .object({
-    ...ItemRefShape,
-    assignedUserId: z
-      .number()
-      .int()
-      .positive()
-      .describe("Id of the user to assign the item to."),
-  })
+const AssignArgsSchema = z.object({
+  id: z.number().int().positive().optional().describe("The item's id."),
+  counter: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("The item's counter, the number the project's UI shows."),
+  assignedUserId: z.number()
+    .int()
+    .positive()
+    .describe("Id of the user to assign the item to."),
+})
   .refine(oneOfIdOrCounter, {
     message: ITEM_REF_MESSAGE,
   }) satisfies z.ZodType<AssignArgs>;
 
 const DeployArgsSchema = z.object({
-  environment: z
-    .string()
+  environment: z.string()
     .optional()
     .describe("Environment deployed to. Falls back to the global environment."),
-  revision: z
-    .string()
+  revision: z.string()
     .min(1)
     .describe("Revision deployed, a commit hash or version."),
   localUsername: z.string().optional().describe("Who is recording the deploy."),
   comment: z.string().optional().describe("Free-text comment."),
-  status: z
-    .enum(DEPLOY_STATUSES)
+  status: z.enum(DEPLOY_STATUSES)
     .optional()
     .describe(
       "started, succeeded, failed or timed_out. The API defaults to succeeded.",
@@ -570,42 +565,32 @@ const DeployArgsSchema = z.object({
 }) satisfies z.ZodType<DeployArgs>;
 
 const DeploysArgsSchema = z.object({
-  environment: z
-    .string()
+  environment: z.string()
     .optional()
     .describe(
       "Only deploys to this environment. Overrides the global environment.",
     ),
-  page: z
-    .number()
+  page: z.number()
     .int()
     .min(1)
     .default(1)
     .describe("Page to fetch, 1-based, newest first."),
 }) satisfies z.ZodType<DeploysArgs>;
 
-const EnvironmentsShape = {
-  environments: z
-    .array(z.string().min(1))
+const OccurrenceCountsArgsSchema = z.object({
+  bucketSize: z.union([z.literal(60), z.literal(3600), z.literal(86400)])
+    .default(86400)
+    .describe("Bucket size in seconds: 60, 3600 or 86400 (a day)."),
+  environments: z.array(z.string().min(1))
     .optional()
     .describe(
       "Only these environments. Falls back to the global environment; empty means any.",
     ),
-};
-
-const OccurrenceCountsArgsSchema = z.object({
-  bucketSize: z
-    .union([z.literal(60), z.literal(3600), z.literal(86400)])
-    .default(86400)
-    .describe("Bucket size in seconds: 60, 3600 or 86400 (a day)."),
-  ...EnvironmentsShape,
-  minLevel: z
-    .enum(LEVELS)
+  minLevel: z.enum(LEVELS)
     .optional()
     .describe("Lowest level counted. The API defaults to error."),
   maxLevel: z.enum(LEVELS).optional().describe("Highest level counted."),
-  itemId: z
-    .number()
+  itemId: z.number()
     .int()
     .positive()
     .optional()
@@ -613,27 +598,32 @@ const OccurrenceCountsArgsSchema = z.object({
 }) satisfies z.ZodType<OccurrenceCountsArgs>;
 
 const ActivatedCountsArgsSchema = z.object({
-  buckets: z
-    .number()
+  buckets: z.number()
     .int()
     .min(ACTIVATED_BUCKETS_MIN)
     .max(ACTIVATED_BUCKETS_MAX)
     .default(ACTIVATED_BUCKETS_DEFAULT)
     .describe("How many daily buckets, 2 to 366."),
-  ...EnvironmentsShape,
+  environments: z.array(z.string().min(1))
+    .optional()
+    .describe(
+      "Only these environments. Falls back to the global environment; empty means any.",
+    ),
 }) satisfies z.ZodType<ActivatedCountsArgs>;
 
 const TopActiveArgsSchema = z.object({
-  hours: z
-    .number()
+  hours: z.number()
     .int()
     .min(TOP_HOURS_MIN)
     .max(TOP_HOURS_MAX)
     .default(TOP_HOURS_DEFAULT)
     .describe("How many recent hours to count, 1 to 168."),
-  ...EnvironmentsShape,
-  byOccurrences: z
-    .boolean()
+  environments: z.array(z.string().min(1))
+    .optional()
+    .describe(
+      "Only these environments. Falls back to the global environment; empty means any.",
+    ),
+  byOccurrences: z.boolean()
     .default(false)
     .describe(
       "Order by occurrences alone, instead of by level and then occurrences.",
@@ -641,24 +631,20 @@ const TopActiveArgsSchema = z.object({
 }) satisfies z.ZodType<TopActiveArgs>;
 
 const FingerprintTestArgsSchema = z.object({
-  projectId: z
-    .number()
+  projectId: z.number()
     .int()
     .positive()
     .describe("The token's project id."),
-  instance: z
-    .number()
+  instance: z.number()
     .int()
     .positive()
     .describe("Id of the occurrence to group."),
-  rules: z
-    .array(z.record(z.string(), z.unknown()))
+  rules: z.array(z.record(z.string(), z.unknown()))
     .optional()
     .describe(
       "Rules to try instead of the stored ones: condition, fingerprint, title.",
     ),
-  ignoreClientFingerprint: z
-    .boolean()
+  ignoreClientFingerprint: z.boolean()
     .optional()
     .describe("Skip a fingerprint the client sent, when trying rules."),
 }) satisfies z.ZodType<FingerprintTestArgs>;
@@ -1332,7 +1318,7 @@ export const behavior = {
   // String literals, not constants: the registry catalog reads them from the
   // source. The collective is provisional, rename it here.
   type: "@reset/rollbar",
-  version: "2026.10.21.2",
+  version: "2026.10.24.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     items: {
@@ -2021,6 +2007,15 @@ export const behavior = {
       toVersion: "2026.10.21.2",
       description: "Log the items filters as text instead of " +
         "[object Object]; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+    {
+      toVersion: "2026.10.24.1",
+      description:
+        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; arguments and behavior unchanged",
       upgradeAttributes: (old: Record<string, unknown>): Record<
         string,
         unknown

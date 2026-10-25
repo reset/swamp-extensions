@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@reset/rollbar"
-version: "2026.10.21.2"
+version: "2026.10.24.1"
 license: MIT
 description: |-
   Drive a Rollbar-compatible crash-reporting API (api.rollbar.com, or

@@ -28,6 +28,7 @@ import {
   RollbarError,
   summarize,
 } from "./rollbar.ts";
+import source from "./rollbar.ts" with { type: "text" };
 
 const HOST = "https://crash.example.com";
 const TOKEN = "read-token-for-tests";
@@ -1151,3 +1152,85 @@ Deno.test("the version bump carries a no-op upgrade to the same version", () => 
   const args = { host: HOST, token: TOKEN };
   assertEquals(last.upgradeAttributes(args), args);
 });
+
+Deno.test("every argument's description is written where the registry reads it", () => {
+  // swamp's registry reads arguments from the source text, not the running
+  // behavior: the fields written inside the schema's own `z.object({ ... })`,
+  // each starting `name: z.<type>(` on one line, with its description in
+  // `.describe("...")` as a double-quoted string literal. A spread, a shared
+  // schema constant, a field split after `z` or written `z.iso.datetime()`
+  // is left out of the registry's argument list; `.meta({ description })`, a
+  // constant or a template literal leaves its description empty.
+  const objects = objectLiterals(source);
+  const schemas: { shape: Record<string, { description?: string }> }[] = [
+    behavior.globalArguments,
+    ...Object.values(behavior.methods).map((method) => method.arguments),
+  ];
+  const unread: string[] = [];
+  for (const schema of schemas) {
+    const names = Object.keys(schema.shape);
+    if (names.length === 0) {
+      continue;
+    }
+    const written = objects.find((fields) =>
+      fields.length === names.length &&
+      fields.every((field, i) => field.startsWith(`${names[i]}:`))
+    );
+    for (const [i, name] of names.entries()) {
+      const text = written?.[i] ?? "";
+      const description = schema.shape[name].description;
+      const read = description !== undefined &&
+        new RegExp(`^${name}:[ \\t]*z\\.\\w+\\(`).test(text) &&
+        new RegExp(`\\.describe\\(\\s*${escape(JSON.stringify(description))}`)
+          .test(text);
+      if (!read) {
+        unread.push(name);
+      }
+    }
+  }
+  assertEquals(unread, []);
+});
+
+/** `text` with every regular-expression metacharacter escaped. */
+function escape(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** The top-level fields of every `z.object({ ... })` literal in `text`, as written. */
+function objectLiterals(text: string): string[][] {
+  const objects: string[][] = [];
+  const opener = /z\.object\(\{/g;
+  for (const match of text.matchAll(opener)) {
+    const fields: string[] = [];
+    let depth = 0;
+    let quote = "";
+    let start = match.index + match[0].length;
+    for (let i = start; i < text.length; i++) {
+      const c = text[i];
+      if (quote) {
+        if (c === "\\") {
+          i++;
+        } else if (c === quote) {
+          quote = "";
+        }
+      } else if (c === '"' || c === "'" || c === "`") {
+        quote = c;
+      } else if ("([{".includes(c)) {
+        depth++;
+      } else if (depth > 0 && ")]}".includes(c)) {
+        depth--;
+      } else if (depth === 0 && (c === "," || c === "}")) {
+        const field = text.slice(start, i).trim();
+        if (field) {
+          fields.push(field);
+        }
+        start = i + 1;
+        if (c === "}") {
+          break;
+        }
+      }
+    }
+    objects.push(fields);
+  }
+  return objects;
+}

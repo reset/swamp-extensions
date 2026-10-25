@@ -474,61 +474,48 @@ export class BuildqError extends Error {
 // `satisfies` keeps each schema in step with its interface)
 // ---------------------------------------------------------------------------
 
-const GlobalArgsSchema = z
-  .object({
-    host: z
-      .url()
-      .describe(
-        "Base URL of the coordinator, such as https://buildq.example.net.",
-      ),
-    owner: z
-      .string()
-      .min(1)
-      .optional()
-      .describe("Forge owner of the repository, with repo."),
-    repo: z
-      .string()
-      .min(1)
-      .optional()
-      .describe("Name of the repository, with owner."),
-    organization: z
-      .string()
-      .min(1)
-      .optional()
-      .describe(
-        "Organization slug, with pipeline: builds are then read under " +
-          "/api/v2/organizations. Also the default of org-builds.",
-      ),
-    pipeline: z
-      .string()
-      .min(1)
-      .optional()
-      .describe("Pipeline slug, with organization."),
-    token: z
-      .string()
-      .min(1)
-      .optional()
-      .meta({ sensitive: true })
-      .describe(
-        "Forge token sent as Authorization: token on rebuild, cancel and " +
-          "unblock. Its owner must be able to push to the repository. Reads " +
-          "need none.",
-      ),
-    accessClientId: z
-      .string()
-      .min(1)
-      .optional()
-      .describe(
-        "Cloudflare Access service token id, sent as CF-Access-Client-Id " +
-          "when the coordinator sits behind Access.",
-      ),
-    accessClientSecret: z
-      .string()
-      .min(1)
-      .optional()
-      .meta({ sensitive: true })
-      .describe("Cloudflare Access service token secret."),
-  })
+const GlobalArgsSchema = z.object({
+  host: z.url()
+    .describe(
+      "Base URL of the coordinator, such as https://buildq.example.net.",
+    ),
+  owner: z.string()
+    .min(1)
+    .optional()
+    .describe("Forge owner of the repository, with repo."),
+  repo: z.string()
+    .min(1)
+    .optional()
+    .describe("Name of the repository, with owner."),
+  organization: z.string()
+    .min(1)
+    .optional()
+    .describe(
+      "Organization slug, with pipeline: builds are then read under /api/v2/organizations. Also the default of org-builds.",
+    ),
+  pipeline: z.string()
+    .min(1)
+    .optional()
+    .describe("Pipeline slug, with organization."),
+  token: z.string()
+    .min(1)
+    .optional()
+    .meta({ sensitive: true })
+    .describe(
+      "Forge token sent as Authorization: token on rebuild, cancel and unblock. Its owner must be able to push to the repository. Reads need none.",
+    ),
+  accessClientId: z.string()
+    .min(1)
+    .optional()
+    .describe(
+      "Cloudflare Access service token id, sent as CF-Access-Client-Id when the coordinator sits behind Access.",
+    ),
+  accessClientSecret: z.string()
+    .min(1)
+    .optional()
+    .meta({ sensitive: true })
+    .describe("Cloudflare Access service token secret."),
+})
   .refine(
     (value) => (value.owner === undefined) === (value.repo === undefined),
     {
@@ -548,37 +535,31 @@ const GlobalArgsSchema = z
     { message: "Give accessClientId and accessClientSecret together." },
   ) satisfies z.ZodType<GlobalArgs>;
 
-const NumberShape = {
+const BuildArgsSchema = z.object({
   number: z.number().int().positive().describe("The build's number."),
-};
-
-const BuildArgsSchema = z.object(NumberShape) satisfies z.ZodType<BuildArgs>;
+}) satisfies z.ZodType<BuildArgs>;
 
 const BuildsArgsSchema = z.object({
-  limit: z
-    .number()
+  limit: z.number()
     .int()
     .min(1)
     .max(BUILDS_LIMIT)
     .default(BUILDS_PAGE_SIZE)
     .describe("How many builds to list, newest first."),
   branch: z.string().min(1).optional().describe("Only builds of this branch."),
-  commit: z
-    .string()
+  commit: z.string()
     .min(1)
     .optional()
     .describe("Only builds whose commit starts with this prefix."),
 }) satisfies z.ZodType<BuildsArgs>;
 
 const LogArgsSchema = z.object({
-  ...NumberShape,
-  job: z
-    .string()
+  number: z.number().int().positive().describe("The build's number."),
+  job: z.string()
     .min(1)
     .optional()
     .describe("The job's id, such as 13.1. Defaults to the build's first job."),
-  tailKiB: z
-    .number()
+  tailKiB: z.number()
     .int()
     .min(1)
     .max(LOG_TAIL_KIB_LIMIT)
@@ -587,13 +568,11 @@ const LogArgsSchema = z.object({
 }) satisfies z.ZodType<LogArgs>;
 
 const OrgBuildsArgsSchema = z.object({
-  organization: z
-    .string()
+  organization: z.string()
     .min(1)
     .optional()
     .describe("Organization slug. Falls back to the global organization."),
-  limit: z
-    .number()
+  limit: z.number()
     .int()
     .min(1)
     .max(BUILDS_LIMIT)
@@ -602,10 +581,9 @@ const OrgBuildsArgsSchema = z.object({
 }) satisfies z.ZodType<OrgBuildsArgs>;
 
 const UnblockArgsSchema = z.object({
-  ...NumberShape,
+  number: z.number().int().positive().describe("The build's number."),
   job: z.string().min(1).describe("The block's job id, such as 13.2."),
-  fields: z
-    .record(z.string(), z.string())
+  fields: z.record(z.string(), z.string())
     .describe("A value per field key. A field left out takes its default."),
 }) satisfies z.ZodType<UnblockArgs>;
 
@@ -1432,7 +1410,7 @@ export const behavior = {
   // String literals, not constants: the registry catalog reads them from the
   // source. The collective is provisional, rename it here.
   type: "@reset/buildq",
-  version: "2026.10.21.1",
+  version: "2026.10.24.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     builds: {
@@ -1977,4 +1955,15 @@ export const behavior = {
       },
     },
   },
+  upgrades: [
+    {
+      toVersion: "2026.10.24.1",
+      description:
+        "Write every argument where the registry reads it, so its catalog lists them with their descriptions; arguments and behavior unchanged",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+  ],
 };
