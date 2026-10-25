@@ -1622,10 +1622,12 @@ Deno.test("every argument's description is written where the registry reads it",
   // swamp's registry reads arguments from the source text, not the running
   // behavior: the fields written inside the schema's own `z.object({ ... })`,
   // each starting `name: z.<type>(` on one line, with its description in
-  // `.describe("...")` as a double-quoted string literal. A spread, a shared
-  // schema constant, a field split after `z` or written `z.iso.datetime()`
-  // is left out of the registry's argument list; `.meta({ description })`, a
-  // constant or a template literal leaves its description empty.
+  // `.describe("...")` as a string literal. The registry reads a single-quoted
+  // literal too; this test matches only the double-quoted one, so a
+  // description holds no double quote. A spread, a shared schema constant, a
+  // field split after `z` or written `z.iso.datetime()` is left out of the
+  // registry's argument list; `.meta({ description })`, a constant or a
+  // template literal leaves its description empty.
   const objects = objectLiterals(source);
   const schemas: { shape: Record<string, { description?: string }> }[] = [
     behavior.globalArguments,
