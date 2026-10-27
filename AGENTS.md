@@ -31,9 +31,10 @@ Swamp team: 3717.
   since a public domain still names the company and the private services behind it), and the
   forge's address in the dev shell is the only internal hostname it carries.
 - The origin is <https://github.com/reset/swamp-extensions>; there is no copy on the forge. Pull requests
-  open with `smk pr create` and merge with `gh pr merge --merge` once `make ci` has passed on the branch:
-  neither `smk pr merge` nor automerge acts on GitHub. buildq, automerge and workq reaching a GitHub
-  repository is SMK-253, with this repository as its test.
+  open with `smk pr create` and land through automerge's GitHub App (smk/automerge README "GitHub"):
+  a `=merge=` comment merges one once buildq's `buildq` status passes. `smk pr merge` would turn on
+  GitHub's own auto-merge instead, since smk-cli does not yet know automerge serves GitHub, so ask
+  with the comment. workq reaching a GitHub repository is SMK-253, with this repository as its test.
 - Read Swamp's public manual and the vendor skills under `.claude/skills/`, not its AGPL source.
 - Nothing the studio relies on runs only here. Every workflow in `workflows/` is a flight of a
   workload whose relied-on path is SMK's, named in `docs/workloads.md`; the flight runs beside it
