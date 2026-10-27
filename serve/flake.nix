@@ -12,7 +12,8 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
       # The version and hash swamp-club's Homebrew tap names for linux/x86_64 (Formula/swamp.rb), the
-      # same release the Mac runs (.swamp.yaml swampVersion). Move them with the tap.
+      # release .swamp.yaml's swampVersion records and the dev shell (../.nix/flake.nix) pins. Move all
+      # three together.
       version = "20261020.024627.0-sha.26dc044f";
       # The project's config/features names 4.3 (extensions/behaviors/godot/example-project), so the
       # editor is 4.3's: a newer one would rewrite the project on import.
