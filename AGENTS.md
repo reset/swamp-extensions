@@ -34,7 +34,8 @@ Swamp team: 3717.
   open with `smk pr create` and land through automerge's GitHub App (smk/automerge README "GitHub"),
   which `.github/automerge.json` asks to serve this repository: `smk pr merge` posts the `=merge=`
   comment that merges one once buildq's `buildq` status passes, `--after #N` holds one until #N has
-  merged, and an admin's `=rush=` comment merges one at once, untested. workq reaching a GitHub repository is SMK-253, with this repository as its test.
+  merged, and an admin's `=rush=` comment merges one at once, untested. A pull request whose body
+  names an issue shows under that workq issue's Development.
 - Read Swamp's public manual and the vendor skills under `.claude/skills/`, not its AGPL source.
 - Nothing the studio relies on runs only here. Every workflow in `workflows/` is a flight of a
   workload whose relied-on path is SMK's, named in `docs/workloads.md`; the flight runs beside it
