@@ -51,7 +51,7 @@ if [[ -n $named_hosts ]]; then
 fi
 
 if ! command -v swamp >/dev/null 2>&1; then
-    echo "bin/test: swamp is not on PATH; behaviors and workflows were not validated (AGENTS.md, Checks)" >&2
+    echo "bin/test: swamp is not on PATH, so behaviors and workflows were not validated; enter the dev shell (direnv allow)" >&2
     exit 1
 fi
 
