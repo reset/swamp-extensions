@@ -54,6 +54,40 @@
           # render. This repository's own packages join them as
           # `buildInputs = smkShell.packages ++ (with pkgs; [ ... ]);`.
           smkShell = import ./smk.nix { inherit pkgs smk trees; };
+          # swamp, which bin/test runs to validate every behavior and workflow, so a build agent has it as a
+          # developer does. The version and hashes are those swamp-club's Homebrew tap names (Formula/swamp.rb) for
+          # the release .swamp.yaml's swampVersion records, which ../serve/flake.nix runs too; move all three
+          # together.
+          swampVersion = "20261020.024627.0-sha.26dc044f";
+          swampTarget =
+            {
+              aarch64-darwin = {
+                platform = "darwin-aarch64";
+                hash = "sha256-/VXNcPttFfXnF0JpVuKgecWvUs3S9y/ljG5SnIrJjAI=";
+              };
+              x86_64-linux = {
+                platform = "linux-x86_64";
+                hash = "sha256-cq8jh5REhtw0CLBlOXJyBx5AhX/025CVwWa0LL4Jo84=";
+              };
+            }
+            .${system};
+          swamp = pkgs.stdenvNoCC.mkDerivation {
+            pname = "swamp";
+            version = swampVersion;
+            src = pkgs.fetchurl {
+              url = "https://artifacts.swamp-club.com/swamp/${swampVersion}/binary/${
+                builtins.replaceStrings [ "-" ] [ "/" ] swampTarget.platform
+              }/swamp-${swampVersion}-binary-${swampTarget.platform}.tar.gz";
+              inherit (swampTarget) hash;
+            };
+            sourceRoot = ".";
+            # A compiled single binary carries its program after the executable image: strip or patchelf would
+            # cut it off. On Linux it links only the host's glibc, which the build agents' Ubuntu has.
+            dontFixup = true;
+            installPhase = ''
+              install -Dm755 swamp $out/bin/swamp
+            '';
+          };
         in
         {
           default = pkgs.mkShell (
@@ -61,7 +95,10 @@
             // {
               # Deno runs, type-checks and tests the Swamp extensions under extensions/; swamp's own bundled
               # copy lives outside the repository (~/.swamp/deno), so the shell pins its own.
-              buildInputs = smkShell.packages ++ (with pkgs; [ deno ]);
+              buildInputs = smkShell.packages ++ [
+                pkgs.deno
+                swamp
+              ];
             }
           );
         }

@@ -57,10 +57,10 @@ Swamp team: 3717.
 
 `make ci` runs smk's checks (`smk format --check`, `smk lint`, `smk typecheck`) and `bin/test`, which
 type-checks and tests every extension with Deno and validates every behavior instance and workflow with
-swamp. Deno is pinned in `.nix/flake.nix`; swamp is installed per machine from the Homebrew tap
-(`brew trust swamp-club/tap`, then `brew install swamp`) and is not in the dev shell, so `bin/test`
-fails with that message where swamp is absent. `.buildq/pipeline.yml` is what buildq runs once it builds
-from GitHub (SMK-253); until then `make ci` runs on the branch before its pull request opens.
+swamp. Deno and swamp are both pinned in `.nix/flake.nix`, swamp at `.swamp.yaml`'s `swampVersion`, so
+the dev shell runs the same release on a Mac and on a build agent; `bin/test` fails, naming it, where
+swamp is absent. buildq builds every push from GitHub with `.buildq/pipeline.yml`, and its `buildq`
+status is the check main's ruleset requires.
 
 Extension work follows the vendor's lifecycle in `.claude/skills/swamp/references/extension/guide.md`:
 `deno check`, registration (`swamp behavior type search`), the adversarial review, unit tests,
