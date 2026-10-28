@@ -7,9 +7,11 @@
  * groups, dates, counts and people's ids: never an item body, a comment body
  * or an email address.
  *
- * The caller is a machine: it sends a Cloudflare Access service token as
- * `CF-Access-Client-Id` and `CF-Access-Client-Secret`, and the deployment
- * must list the client id as a service caller with grants (README). The lease
+ * The caller is a machine: it sends its caller token as `Authorization:
+ * Bearer ct_…`, or a Cloudflare Access service token as `CF-Access-Client-Id`
+ * and `CF-Access-Client-Secret` where Access still fronts the deployment, and
+ * the deployment must list the token's SHA-256 or the client id as a service
+ * caller with grants (README). The lease
  * and fence protocol under `…/items/{key}/lease` is not in this version.
  *
  * @module
@@ -18,6 +20,7 @@
 import { z } from "npm:zod@4";
 
 const API_PREFIX = "/api/v1";
+const AUTHORIZATION_HEADER = "Authorization";
 const CLIENT_ID_HEADER = "CF-Access-Client-Id";
 const CLIENT_SECRET_HEADER = "CF-Access-Client-Secret";
 const REPLAYED_HEADER = "Replayed";
@@ -58,9 +61,9 @@ const KEPT_HISTORY_VALUES = new Set([
 /** What a status code means when the answer carries no message of its own. */
 const STATUS_HINTS: Record<number, string> = {
   401:
-    "Access admitted no one: the service token is missing or does not verify",
+    "no one was admitted: the caller token or the service token is missing or does not verify",
   403:
-    "the client id is not a listed service caller, or its grants do not cover this",
+    "the caller is not a listed service caller, or its grants do not cover this",
   404: "not found, or not visible to the caller's grants",
 };
 
@@ -77,10 +80,12 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 export interface GlobalArgs {
   /** Base URL of the deployment, such as https://workq.example.com. */
   host: string;
+  /** The caller token, sent as Authorization: Bearer. Sensitive. Either this or both halves of the service token. */
+  token?: string;
   /** Client id of the Access service token, sent as CF-Access-Client-Id. */
-  clientId: string;
+  clientId?: string;
   /** Client secret of the Access service token, sent as CF-Access-Client-Secret. Sensitive. */
-  clientSecret: string;
+  clientSecret?: string;
   /** Default org for every method that takes one. A method argument overrides it. */
   org?: string;
   /** Default project slug for every method that takes one. A method argument overrides it. */
@@ -596,20 +601,56 @@ export class WorkqError extends Error {
 // `satisfies` keeps each schema in step with its interface)
 // ---------------------------------------------------------------------------
 
+/** A caller token as the deployment's auth library mints it. */
+const CALLER_TOKEN_PATTERN = /^ct_[A-Za-z0-9_-]{32,}$/;
+
+/** The caller token, or both halves of the service token. */
+function hasCredential(args: GlobalArgs): boolean {
+  return args.token !== undefined ||
+    (args.clientId !== undefined && args.clientSecret !== undefined);
+}
+
+/**
+ * The caller token alone when there is one: the deployment reads the bearer
+ * before any Access assertion, so the service token would be a second
+ * credential sent for nothing.
+ */
+function credentialHeaders(args: GlobalArgs): Record<string, string> {
+  if (args.token !== undefined) {
+    return { [AUTHORIZATION_HEADER]: `Bearer ${args.token}` };
+  }
+  if (args.clientId === undefined || args.clientSecret === undefined) {
+    throw new Error("give the caller token, or both clientId and clientSecret");
+  }
+  return {
+    [CLIENT_ID_HEADER]: args.clientId,
+    [CLIENT_SECRET_HEADER]: args.clientSecret,
+  };
+}
+
 const GlobalArgsSchema = z.object({
   host: z.url()
     .describe("Base URL of the deployment, such as https://workq.example.com."),
-  clientId: z.string()
-    .min(1)
+  token: z.string()
+    .regex(CALLER_TOKEN_PATTERN)
+    .optional()
     .meta({ sensitive: true })
     .describe(
-      "Client id of the Access service token, sent as CF-Access-Client-Id. The deployment must list it as a service caller.",
+      "The caller token (ct_…), sent as Authorization: Bearer. The deployment must list its SHA-256 as a service caller. Given, the service token is not sent.",
+    ),
+  clientId: z.string()
+    .min(1)
+    .optional()
+    .meta({ sensitive: true })
+    .describe(
+      "Client id of the Access service token, sent as CF-Access-Client-Id when no caller token is given. The deployment must list it as a service caller.",
     ),
   clientSecret: z.string()
     .min(1)
+    .optional()
     .meta({ sensitive: true })
     .describe(
-      "Client secret of the Access service token, sent as CF-Access-Client-Secret.",
+      "Client secret of the Access service token, sent as CF-Access-Client-Secret when no caller token is given.",
     ),
   org: z.string().regex(SLUG_PATTERN).optional().describe(
     "Default org for every method that takes one: lowercase letters, digits and hyphens.",
@@ -617,6 +658,8 @@ const GlobalArgsSchema = z.object({
   project: z.string().regex(SLUG_PATTERN).optional().describe(
     "Default project for every method that takes one: lowercase letters, digits and hyphens.",
   ),
+}).refine(hasCredential, {
+  message: "give the caller token, or both clientId and clientSecret",
 }) satisfies z.ZodType<GlobalArgs>;
 
 const ProjectArgsSchema = z.object({
@@ -1435,7 +1478,7 @@ function orgOf(args: { org?: string }, globalArgs: GlobalArgs): string {
 }
 
 /**
- * Sends one request with the service token headers and returns the parsed
+ * Sends one request with the caller's credential and returns the parsed
  * answer with its status and whether it was replayed from a request receipt.
  *
  * Throws a WorkqError for a 4xx or 5xx status, for a redirect (Access sending
@@ -1455,8 +1498,7 @@ export async function request(
     if (value !== undefined) url.searchParams.set(key, String(value));
   }
   const headers: Record<string, string> = {
-    [CLIENT_ID_HEADER]: globalArgs.clientId,
-    [CLIENT_SECRET_HEADER]: globalArgs.clientSecret,
+    ...credentialHeaders(globalArgs),
     Accept: "application/json",
   };
   const body = options.body === undefined
@@ -1484,7 +1526,7 @@ export async function request(
   const label = `${options.method} ${API_PREFIX}${options.path}`;
   if (response.status >= 300 && response.status < 400) {
     throw new WorkqError(
-      `${label}: redirected (${response.status}) to sign in; Access did not admit the service token`,
+      `${label}: redirected (${response.status}) to sign in; Access did not admit the credential`,
       response.status,
     );
   }
@@ -1574,7 +1616,7 @@ export const behavior = {
   // String literals, not constants: the registry catalog reads them from the
   // source.
   type: "@reset/workq",
-  version: "2026.10.24.1",
+  version: "2026.10.27.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     me: {
@@ -2249,6 +2291,15 @@ export const behavior = {
       toVersion: "2026.10.24.1",
       description:
         "Write every argument where the registry reads it, so its catalog lists them with their descriptions; arguments and behavior unchanged",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+    {
+      toVersion: "2026.10.27.1",
+      description:
+        "Take a caller token (token, sent as Authorization: Bearer) in place of the Access service token; an instance with clientId and clientSecret is unchanged",
       upgradeAttributes: (old: Record<string, unknown>): Record<
         string,
         unknown
