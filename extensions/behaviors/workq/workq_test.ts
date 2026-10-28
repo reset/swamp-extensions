@@ -30,6 +30,7 @@ import source from "./workq.ts" with { type: "text" };
 
 const CLIENT_ID = "0123456789abcdef0123456789abcdef.access";
 const CLIENT_SECRET = "client-secret-for-tests-only";
+const CALLER_TOKEN = "ct_callertokenfortestsonly0123456789abcdefgh";
 const ORG = "acme";
 const PROJECT = "rog";
 
@@ -185,6 +186,14 @@ class FakeWorkq {
     const forced = this.override?.(call);
     if (forced !== undefined) return forced;
 
+    // A caller token is the deployment's own check, ahead of Access's: one
+    // no caller names is refused, never handed on.
+    const authorization = request.headers.get("authorization");
+    if (authorization !== null) {
+      return authorization === `Bearer ${CALLER_TOKEN}`
+        ? this.serve(url, call)
+        : refuse(401, "not a service caller");
+    }
     // Access: no token is sent to sign in, an unlisted id is not a caller.
     const id = request.headers.get("cf-access-client-id");
     const secret = request.headers.get("cf-access-client-secret");
@@ -193,7 +202,10 @@ class FakeWorkq {
     }
     if (id !== CLIENT_ID) return refuse(403, "not a service caller");
     if (secret !== CLIENT_SECRET) return refuse(401, "no Access assertion");
+    return this.serve(url, call);
+  }
 
+  private serve(url: URL, call: Call): Response {
     if (!url.pathname.startsWith("/api/v1/")) return refuse(404, "not found");
     const path = url.pathname.slice("/api/v1".length);
     const body = (call.body ?? {}) as Raw;
@@ -223,7 +235,7 @@ class FakeWorkq {
       if (match[1] !== ORG || !["rog", "wiki"].includes(match[2])) {
         return refuse(404, "project not found");
       }
-      if (request.method === "POST") {
+      if (call.method === "POST") {
         return this.create(match[2], body);
       }
       return this.list(call.query);
@@ -231,7 +243,7 @@ class FakeWorkq {
     if ((match = path.match(/^\/orgs\/([^/]+)\/items\/([^/]+)$/))) {
       const item = match[1] === ORG ? this.items.get(match[2]) : undefined;
       if (item === undefined) return refuse(404, "item not found");
-      if (request.method === "PATCH") return this.change(item, body);
+      if (call.method === "PATCH") return this.change(item, body);
       return json(item);
     }
     if ((match = path.match(/^\/orgs\/([^/]+)\/items\/([^/]+)\/history$/))) {
@@ -621,6 +633,30 @@ Deno.test("global arguments need a host URL and both token halves", () => {
       clientSecret: "s",
       org: "Not A Slug",
     }).success,
+  );
+});
+
+Deno.test("global arguments take a caller token in place of the service token", () => {
+  const schema = behavior.globalArguments;
+  const host = "https://workq.example.com";
+  assert(schema.safeParse({ host, token: CALLER_TOKEN }).success);
+  assert(
+    schema.safeParse({
+      host,
+      token: CALLER_TOKEN,
+      clientId: "id",
+      clientSecret: "s",
+    }).success,
+  );
+  assertFalse(schema.safeParse({ host }).success, "no credential at all");
+  assertFalse(
+    schema.safeParse({ host, token: "Bearer-without-the-prefix-0123456789ab" })
+      .success,
+    "a token without the ct_ prefix",
+  );
+  assertFalse(
+    schema.safeParse({ host, token: "ct_short" }).success,
+    "a token too short to be minted",
   );
 });
 
@@ -1296,6 +1332,46 @@ serverTest(
 // ---------------------------------------------------------------------------
 // Transport
 // ---------------------------------------------------------------------------
+
+serverTest(
+  "a caller token is sent as a bearer, alone, and a wrong one is refused",
+  async (h) => {
+    const caller = h.withGlobals({
+      token: CALLER_TOKEN,
+      clientId: undefined,
+      clientSecret: undefined,
+    });
+    await behavior.methods.me.execute({}, caller.context);
+    assertEquals(h.fake.calls.length, 1);
+    const headers = h.fake.calls[0].headers;
+    assertEquals(headers["authorization"], `Bearer ${CALLER_TOKEN}`);
+    assertFalse("cf-access-client-id" in headers);
+    assertFalse("cf-access-client-secret" in headers);
+    assertEquals(caller.getWrittenResources().length, 1);
+
+    // Given both, the token goes and the service token stays home.
+    const both = h.withGlobals({ token: CALLER_TOKEN });
+    await behavior.methods.me.execute({}, both.context);
+    assertFalse("cf-access-client-id" in h.fake.calls[1].headers);
+
+    const wrong = h.withGlobals({
+      token: "ct_wrongtokenfortestsonly0123456789abcdefgh",
+    });
+    const refused = await assertRejects(
+      () => behavior.methods.me.execute({}, wrong.context),
+      WorkqError,
+    );
+    assertEquals(refused.status, 401);
+    assertStringIncludes(refused.message, "does not verify");
+    assertEquals(wrong.getWrittenResources().length, 0);
+    for (const log of [...caller.getLogs(), ...wrong.getLogs()]) {
+      assertFalse(
+        JSON.stringify([log.message, log.args]).includes(CALLER_TOKEN),
+        "the token never reaches a log",
+      );
+    }
+  },
+);
 
 serverTest(
   "a token Access does not admit fails before anything is written",

@@ -7,10 +7,11 @@ releases and sprints. Every method writes what it read as a versioned resource,
 so a workflow can assert on a release or a sprint with CEL and a report can read
 it later.
 
-It needs nothing beyond Swamp and a Cloudflare Access service token the
-deployment admits. It talks to the documented HTTP API only: JSON under
-`/api/v1`, described by the deployment's `/api/v1/openapi.json`, with the token
-sent as `CF-Access-Client-Id` and `CF-Access-Client-Secret`. Methods that the
+It needs nothing beyond Swamp and a credential the deployment admits: a caller
+token, sent as `Authorization: Bearer`, or a Cloudflare Access service token,
+sent as `CF-Access-Client-Id` and `CF-Access-Client-Secret`, where Access still
+fronts the deployment. It talks to the documented HTTP API only: JSON under
+`/api/v1`, described by the deployment's `/api/v1/openapi.json`. Methods that the
 API also exposes as MCP tools carry the tool's name (`list_items`,
 `create_item`, `change_item`).
 
@@ -18,16 +19,19 @@ API also exposes as MCP tools carry the tool's name (`list_items`,
 
 A machine has no sign-in. The deployment's operator must arrange, once:
 
-1. An Access service token for this caller, on the application in front of the
-   deployment, admitted by that application's policy.
-2. The token's client id in the deployment's `SERVICE_CALLERS` with the caller's
-   name and its grants: a project by org and slug, or an org alone. The grants
-   decide what the methods below may read and write; a `writes` list on the
-   entry narrows it further, and every other write is refused (403).
+1. A caller token for this caller (`ct_` and at least 32 random letters,
+   digits, `-` or `_`), or an Access service token on the application in
+   front of the deployment, admitted by that application's policy.
+2. The caller token's SHA-256 (hex), or the service token's client id, in the
+   deployment's `SERVICE_CALLERS` with the caller's name and its grants: a
+   project by org and slug, or an org alone. The grants decide what the methods
+   below may read and write; a `writes` list on the entry narrows it further,
+   and every other write is refused (403).
 
-Until both are in place every request is refused: a 403 `not a service caller`
-for an unlisted client id, a redirect to sign in for a token Access does not
-admit. The behavior names each in its error. That setup is a change to the
+Until both are in place every request is refused: a 401 for a caller token no
+entry names, a 403 `not a service caller` for an unlisted client id, a redirect
+to sign in for a service token Access does not admit. The behavior names each
+in its error. That setup is a change to the
 deployment, not to this behavior, and needs its operator's authorization.
 
 ## Install
@@ -38,13 +42,12 @@ swamp extension pull @reset/workq
 
 ## Set up a behavior instance
 
-Put both halves of the token in a vault, never in a YAML file. `swamp vault put`
-reads the value from stdin or a hidden prompt, so it never reaches your shell
+Put the credential in a vault, never in a YAML file. `swamp vault put` reads
+the value from stdin or a hidden prompt, so it never reaches your shell
 history:
 
 ```sh
-pbpaste | swamp vault put default workq-access-client-id
-pbpaste | swamp vault put default workq-access-client-secret
+pbpaste | swamp vault put default workq-caller-token
 ```
 
 Then create one instance per deployment, with the org and project most methods
@@ -53,21 +56,27 @@ should default to:
 ```sh
 swamp behavior create @reset/workq tracker \
   --global-arg host=https://workq.example.com \
-  --global-arg 'clientId=${{ vault.get(default, workq-access-client-id) }}' \
-  --global-arg 'clientSecret=${{ vault.get(default, workq-access-client-secret) }}' \
+  --global-arg 'token=${{ vault.get(default, workq-caller-token) }}' \
   --global-arg org=acme \
   --global-arg project=rog
 ```
+
+With an Access service token instead, put both halves in the vault and pass
+`clientId` and `clientSecret` in place of `token`.
 
 Global arguments:
 
 | Argument       | Default  | Meaning                                                                               |
 | -------------- | -------- | ------------------------------------------------------------------------------------- |
 | `host`         | required | Base URL of the deployment.                                                           |
-| `clientId`     | required | Client id of the Access service token, sent as `CF-Access-Client-Id`. Sensitive.      |
-| `clientSecret` | required | Client secret of the token, sent as `CF-Access-Client-Secret`. Sensitive.             |
+| `token`        | none     | The caller token, sent as `Authorization: Bearer`, alone. Sensitive.                  |
+| `clientId`     | none     | Client id of the Access service token, sent as `CF-Access-Client-Id`. Sensitive.      |
+| `clientSecret` | none     | Client secret of the token, sent as `CF-Access-Client-Secret`. Sensitive.             |
 | `org`          | none     | Default org slug for every method that takes one. A method argument overrides it.     |
 | `project`      | none     | Default project slug for every method that takes one. A method argument overrides it. |
+
+Give `token`, or both `clientId` and `clientSecret`. Given both, only the token
+is sent.
 
 ## Methods
 
@@ -150,8 +159,8 @@ jobs:
 ## Errors
 
 A refused answer throws a `WorkqError` with the HTTP status and the API's
-message: 401 when Access admitted no one, 403 when the client id is not a listed
-service caller or its grants do not cover the request, 404 for anything the
+message: 401 when no credential was admitted, 403 when the caller is not a
+listed service caller or its grants do not cover the request, 404 for anything the
 grants do not make visible (the API answers 404, never 403, for a project the
 caller may not see). A redirect is a token Access did not admit, sent to sign
 in, and is reported as such rather than followed. A 409 carries the API's
