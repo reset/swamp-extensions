@@ -1,0 +1,23 @@
+manifestVersion: 1
+name: "@reset/steam-workshop"
+version: "2026.10.30.1"
+license: MIT
+description: Sample a Steam Workshop item's public stats and summarise them.
+# The public home of every @reset extension (decided October 20, 2026); the
+# quality factor repository-verified credits it once the repository exists.
+repository: https://github.com/reset/swamp-extensions
+paths:
+  base: manifest
+behaviors:
+  - steam_workshop.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+# Empty means every platform: the behavior only makes an HTTPS request.
+platforms: []
+labels:
+  - steam
+  - steam-workshop
+  - game-development
+  - analytics
+  - monitoring

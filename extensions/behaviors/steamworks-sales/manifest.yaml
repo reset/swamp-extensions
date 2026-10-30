@@ -1,0 +1,22 @@
+manifestVersion: 1
+name: "@reset/steamworks-sales"
+version: "2026.10.30.1"
+license: MIT
+description: Record a Steam partner's daily sales aggregates and summarise them.
+# The public home of every @reset extension (decided October 20, 2026); the
+# quality factor repository-verified credits it once the repository exists.
+repository: https://github.com/reset/swamp-extensions
+paths:
+  base: manifest
+behaviors:
+  - steamworks_sales.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+# Empty means every platform: the behavior only makes HTTPS requests.
+platforms: []
+labels:
+  - steam
+  - game-development
+  - sales
+  - analytics

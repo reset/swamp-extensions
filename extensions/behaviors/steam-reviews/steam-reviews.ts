@@ -1,17 +1,27 @@
 /**
- * A Swamp behavior for a Steam app's public user reviews, read through
- * Steamworks' documented Web API method IUserReviewsService/GetAppReviews,
- * which replaces store.steampowered.com/appreviews. `summary` keeps the
- * review score and totals; `recent` pages through the reviews created in a
- * window, newest first, and counts positive and negative reviews overall and
- * by language. Every method writes what it read as a resource, so a workflow
- * can assert on it with CEL.
+ * A Swamp behavior for a Steam app's public user reviews. It has two pairs of
+ * methods:
+ *
+ * - `summary` and `recent` read Steamworks' documented Web API method
+ *   IUserReviewsService/GetAppReviews, which replaces
+ *   store.steampowered.com/appreviews. `summary` keeps the review score and
+ *   totals for a set of filters; `recent` pages through the reviews created in
+ *   a window, newest first, and counts positive and negative reviews overall
+ *   and by language.
+ * - `sample` reads the `query_summary` of Steam's public, keyless store
+ *   endpoint `appreviews/<appid>` once and writes the score and counts as a
+ *   new version of the app's `sample` resource; `summarise` reads every
+ *   recorded version back and writes the first, latest, minimum and maximum
+ *   positive ratio and the change over the period.
+ *
+ * Every method writes what it read as a resource, so a workflow can assert on
+ * it with CEL.
  *
  * Reviews are data about players: each one carries its author's SteamID,
  * playtime and free text. A `recent` resource keeps the review id, whether it
  * was positive, when it was written and its language. The author's SteamID
  * and playtime, and the review text, are kept only when the method is asked
- * to keep them.
+ * to keep them. `sample` asks for no reviews at all, only the counts.
  *
  * @module
  */
@@ -20,6 +30,12 @@ import { z } from "npm:zod@4";
 
 const API_URL =
   "https://api.steampowered.com/IUserReviewsService/GetAppReviews/v1/";
+
+/** The Steam store endpoint `sample` reads; the app id is appended. */
+export const REVIEWS_URL = "https://store.steampowered.com/appreviews/";
+
+/** How long one request to Steam may take before it is abandoned. */
+export const REQUEST_TIMEOUT_MS = 15_000;
 
 /** GetAppReviews returns at most 100 reviews per page. */
 const MAX_PER_PAGE = 100;
@@ -46,8 +62,11 @@ const STATUS_HINTS: Record<number, string> = {
   429: "rate limited; a publisher key for the app raises the limit",
 };
 
+/** `true` only when the zod output type and the hand-written interface describe the same shape. */
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+
 // ---------------------------------------------------------------------------
-// Public types
+// Context and global arguments
 // ---------------------------------------------------------------------------
 
 /** How purchases are filtered: Steam purchasers, everyone, or non-Steam keys. */
@@ -60,6 +79,18 @@ export interface GlobalArgs {
   /** Optional Steamworks Web API publisher key for the app. Sensitive. */
   key?: string;
 }
+
+const GlobalArgsSchema = z.object({
+  appId: z.number().int().positive().describe(
+    "Steam app id whose reviews are read, e.g. 440 for Team Fortress 2",
+  ),
+  key: z.string().min(1).optional().meta({ sensitive: true }).describe(
+    "Optional Steamworks Web API publisher key for the app, which summary and recent send for the higher rate limit; reviews are public without it",
+  ),
+});
+
+const _GlobalArgsMatch: Same<z.infer<typeof GlobalArgsSchema>, GlobalArgs> =
+  true;
 
 /** The logger methods this behavior calls. */
 export interface Logger {
@@ -77,12 +108,28 @@ export interface DataHandle {
   name: string;
 }
 
+/** What every method returns. */
+export interface MethodResult {
+  /** Handles of the resources the method wrote. */
+  dataHandles: DataHandle[];
+}
+
+/** One stored record, as swamp's `queryData` returns it. */
+export interface DataRecord {
+  /** Version number of this record. */
+  version: number;
+  /** The record's parsed JSON content. */
+  attributes: Record<string, unknown>;
+}
+
 /** The parts of Swamp's method context this behavior uses. */
-export interface Context {
+export interface MethodContext {
   /** Parsed global arguments of the behavior definition. */
   globalArgs: GlobalArgs;
+  /** Id of this behavior instance, used to find its own recorded samples. */
+  modelId: string;
   /** Cancels requests in flight when the run is cancelled. */
-  signal: AbortSignal;
+  signal?: AbortSignal;
   /** Structured logger. */
   logger: Logger;
   /** Writes a resource validated against its spec and returns its handle. */
@@ -91,13 +138,40 @@ export interface Context {
     name: string,
     data: Record<string, unknown>,
   ) => Promise<DataHandle>;
+  /** CEL query over stored data; a predicate naming `version` searches every version. */
+  queryData?: (predicate: string) => Promise<unknown[]>;
 }
 
-/** What every method returns. */
-export interface MethodResult {
-  /** Handles of the resources the method wrote. */
-  dataHandles: DataHandle[];
+/** The subset of `fetch` the `sample` method uses. Tests replace it. */
+export type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
+
+/** Injectable dependencies, set by tests and otherwise defaulted to the runtime. */
+export interface Injected {
+  /** Replaces the global `fetch`. */
+  _fetch?: Fetcher;
+  /** Replaces the clock, returning the current time. */
+  _now?: () => Date;
 }
+
+/** An answer from the Web API that this behavior cannot use. */
+export class SteamReviewsError extends Error {
+  /** HTTP status of the answer, or 0 when there was none. */
+  readonly status: number;
+  /** Seconds to wait before trying again, on a 429 answer that says. */
+  readonly retryAfterSeconds: number | undefined;
+
+  /** Builds the error. `retryAfterSeconds` is set for a 429 answer only. */
+  constructor(message: string, status: number, retryAfterSeconds?: number) {
+    super(message);
+    this.name = "SteamReviewsError";
+    this.status = status;
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// summary and recent: types and schemas
+// ---------------------------------------------------------------------------
 
 /** The filters both methods share. */
 export interface ReviewFilters {
@@ -197,116 +271,55 @@ export interface ReviewsPage {
   cursor?: string;
 }
 
-/** An answer from the Web API that this behavior cannot use. */
-export class SteamReviewsError extends Error {
-  /** HTTP status of the answer, or 0 when there was none. */
-  readonly status: number;
-  /** Seconds to wait before trying again, on a 429 answer that says. */
-  readonly retryAfterSeconds: number | undefined;
-
-  /** Builds the error. `retryAfterSeconds` is set for a 429 answer only. */
-  constructor(message: string, status: number, retryAfterSeconds?: number) {
-    super(message);
-    this.name = "SteamReviewsError";
-    this.status = status;
-    this.retryAfterSeconds = retryAfterSeconds;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Schemas (private: the exported interfaces above are the public types, and
-// `satisfies` keeps each schema in step with its interface)
-// ---------------------------------------------------------------------------
-
-const GlobalArgsSchema = z.object({
-  appId: z
-    .number()
-    .int()
-    .positive()
-    .describe("The Steam app id whose reviews are read."),
-  key: z
-    .string()
-    .min(1)
-    .optional()
-    .meta({ sensitive: true })
-    .describe(
-      "Optional Steamworks Web API publisher key associated with the app, for the higher rate limit. Reviews are public without it.",
-    ),
-}) satisfies z.ZodType<GlobalArgs>;
-
-const FilterShape = {
-  languages: z
-    .array(z.string().min(1))
-    .min(1)
-    .default(["all"])
-    .describe(
-      "API language codes to read, such as english or schinese; all means every language.",
-    ),
-  purchaseType: z
-    .enum(["steam", "all", "nonSteam"])
-    .default("steam")
-    .describe(
-      "steam counts reviews by Steam purchasers, as the store's score does; all counts every review; nonSteam only keys bought elsewhere.",
-    ),
-  includeOfftopic: z
-    .boolean()
-    .default(false)
-    .describe(
-      "Include reviews Steam filtered as off-topic activity (review bombs).",
-    ),
-};
-
-const SummaryArgsSchema = z.object(FilterShape) satisfies z.ZodType<
-  SummaryArgs
->;
+// Each argument is written out in its own schema, on a line that starts
+// `name: z.<type>(`, with a literal `.describe("...")`: the registry catalogs
+// arguments from the source text and drops any it cannot read that way, a
+// field spread from a shared shape included.
+const SummaryArgsSchema = z.object({
+  languages: z.array(z.string().min(1)).min(1).default(["all"]).describe(
+    "API language codes to read, such as english or schinese; all means every language.",
+  ),
+  purchaseType: z.enum(["steam", "all", "nonSteam"]).default("steam").describe(
+    "steam counts reviews by Steam purchasers, as the store's score does; all counts every review; nonSteam only keys bought elsewhere.",
+  ),
+  includeOfftopic: z.boolean().default(false).describe(
+    "Include reviews Steam filtered as off-topic activity (review bombs).",
+  ),
+}) satisfies z.ZodType<SummaryArgs>;
 
 const RecentArgsSchema = z
   .object({
-    ...FilterShape,
-    since: z
-      .number()
-      .int()
-      .nonnegative()
-      .optional()
-      .describe("Unix seconds of the window's start. Overrides days."),
-    until: z
-      .number()
-      .int()
-      .positive()
-      .optional()
-      .describe("Unix seconds of the window's end. Defaults to now."),
-    days: z
-      .number()
-      .positive()
-      .max(3650)
-      .default(7)
-      .describe("Window length in days, when since is not given."),
-    perPage: z
-      .number()
-      .int()
-      .min(1)
-      .max(MAX_PER_PAGE)
-      .default(100)
-      .describe("Reviews per page, at most 100."),
-    maxPages: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .default(10)
-      .describe("Most pages to fetch; reaching it sets truncated."),
-    keepAuthor: z
-      .boolean()
-      .default(false)
+    languages: z.array(z.string().min(1)).min(1).default(["all"]).describe(
+      "API language codes to read, such as english or schinese; all means every language.",
+    ),
+    purchaseType: z.enum(["steam", "all", "nonSteam"]).default("steam")
       .describe(
-        "Keep each review's author SteamID and playtime at review, which are personal data.",
+        "steam counts reviews by Steam purchasers, as the store's score does; all counts every review; nonSteam only keys bought elsewhere.",
       ),
-    keepText: z
-      .boolean()
-      .default(false)
-      .describe(
-        "Keep each review's text, cut to 2000 characters, which players wrote.",
-      ),
+    includeOfftopic: z.boolean().default(false).describe(
+      "Include reviews Steam filtered as off-topic activity (review bombs).",
+    ),
+    since: z.number().int().nonnegative().optional().describe(
+      "Unix seconds of the window's start. Overrides days.",
+    ),
+    until: z.number().int().positive().optional().describe(
+      "Unix seconds of the window's end. Defaults to now.",
+    ),
+    days: z.number().positive().max(3650).default(7).describe(
+      "Window length in days, when since is not given.",
+    ),
+    perPage: z.number().int().min(1).max(MAX_PER_PAGE).default(100).describe(
+      "Reviews per page, at most 100.",
+    ),
+    maxPages: z.number().int().min(1).max(100).default(10).describe(
+      "Most pages to fetch; reaching it sets truncated.",
+    ),
+    keepAuthor: z.boolean().default(false).describe(
+      "Keep each review's author SteamID and playtime at review, which are personal data.",
+    ),
+    keepText: z.boolean().default(false).describe(
+      "Keep each review's text, cut to 2000 characters, which players wrote.",
+    ),
   })
   .refine(
     (value) =>
@@ -326,7 +339,7 @@ const FiltersSchema = z.object({
   includeOfftopic: z.boolean(),
 }) satisfies z.ZodType<ReviewFilters>;
 
-const SummaryResourceSchema = z.object({
+const ScoreResourceSchema = z.object({
   fetchedAt: z.iso.datetime(),
   appId: z.number().int(),
   filters: FiltersSchema,
@@ -368,7 +381,141 @@ const RecentResourceSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Answer parsing
+// sample and summarise: types and schemas
+// ---------------------------------------------------------------------------
+
+const ReviewsSchema = z.object({
+  reviewScore: z.number().int().nonnegative(),
+  reviewScoreDesc: z.string(),
+  totalPositive: z.number().int().nonnegative(),
+  totalNegative: z.number().int().nonnegative(),
+  totalReviews: z.number().int().nonnegative(),
+});
+
+/** The review score and counts Steam reports in its `query_summary`. */
+export interface Reviews {
+  /** Steam's review score, 0 to 9, from `review_score`. */
+  reviewScore: number;
+  /** Steam's words for the score, e.g. "Very Positive", from `review_score_desc`. */
+  reviewScoreDesc: string;
+  /** Positive reviews, from `total_positive`. */
+  totalPositive: number;
+  /** Negative reviews, from `total_negative`. */
+  totalNegative: number;
+  /** All reviews, from `total_reviews`. */
+  totalReviews: number;
+}
+
+const _ReviewsMatch: Same<z.infer<typeof ReviewsSchema>, Reviews> = true;
+
+const PointSchema = ReviewsSchema.extend({
+  positiveRatio: z.number().min(0).max(1).nullable(),
+  sampledAt: z.iso.datetime(),
+});
+
+/** A review score, its counts and ratio, and the moment they were recorded. */
+export interface Point extends Reviews {
+  /** Positive reviews over positive and negative reviews, or null when there are none. */
+  positiveRatio: number | null;
+  /** ISO-8601 time the reviews were read. */
+  sampledAt: string;
+}
+
+const _PointMatch: Same<z.infer<typeof PointSchema>, Point> = true;
+
+const SampleSchema = PointSchema.extend({
+  appId: z.number().int().positive(),
+});
+
+/** One recorded review summary, as stored in one version of the `sample` resource. */
+export interface Sample extends Point {
+  /** Steam app id the reviews belong to. */
+  appId: number;
+}
+
+const _SampleMatch: Same<z.infer<typeof SampleSchema>, Sample> = true;
+
+const ChangeSchema = z.object({
+  positiveRatio: z.number().min(-1).max(1).nullable(),
+  reviewScore: z.number().int(),
+  totalPositive: z.number().int(),
+  totalNegative: z.number().int(),
+  totalReviews: z.number().int(),
+});
+
+/** The latest sample minus the first. */
+export interface Change {
+  /** Change in positive ratio, or null when either end has no reviews. */
+  positiveRatio: number | null;
+  /** Change in Steam's review score. */
+  reviewScore: number;
+  /** Positive reviews added. */
+  totalPositive: number;
+  /** Negative reviews added. */
+  totalNegative: number;
+  /** Reviews added. */
+  totalReviews: number;
+}
+
+const _ChangeMatch: Same<z.infer<typeof ChangeSchema>, Change> = true;
+
+const SummarySchema = z.object({
+  appId: z.number().int().positive(),
+  samples: z.number().int().positive(),
+  since: z.iso.datetime().nullable(),
+  first: PointSchema,
+  latest: PointSchema,
+  min: PointSchema.nullable(),
+  max: PointSchema.nullable(),
+  change: ChangeSchema,
+  summarisedAt: z.iso.datetime(),
+});
+
+/** The summary of an app's recorded samples. */
+export interface Summary {
+  /** Steam app id the samples belong to. */
+  appId: number;
+  /** How many samples were summarised. */
+  samples: number;
+  /** The lower bound on recording time, or null when every sample counted. */
+  since: string | null;
+  /** The earliest sample. */
+  first: Point;
+  /** The most recent sample. */
+  latest: Point;
+  /** The lowest positive ratio, the earliest on a tie; null when no sample has reviews. */
+  min: Point | null;
+  /** The highest positive ratio, the earliest on a tie; null when no sample has reviews. */
+  max: Point | null;
+  /** The latest sample minus the first. */
+  change: Change;
+  /** ISO-8601 time the summary was written. */
+  summarisedAt: string;
+}
+
+const _SummaryMatch: Same<z.infer<typeof SummarySchema>, Summary> = true;
+
+const SampleArgsSchema = z.object({});
+
+const SummariseArgsSchema = z.object({
+  since: z.string().pipe(z.iso.datetime()).optional().describe(
+    "Only summarise samples recorded at or after this ISO-8601 time; all samples when omitted",
+  ),
+});
+
+/** Arguments of the `summarise` method. */
+export interface SummariseArgs {
+  /** Only samples recorded at or after this ISO-8601 time count. */
+  since?: string;
+}
+
+const _SummariseArgsMatch: Same<
+  z.infer<typeof SummariseArgsSchema>,
+  SummariseArgs
+> = true;
+
+// ---------------------------------------------------------------------------
+// GetAppReviews: parsing and transport for summary and recent
 // ---------------------------------------------------------------------------
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -502,10 +649,6 @@ function retryAfterSeconds(headers: Headers): number | undefined {
   return asInteger(headers.get("Retry-After"));
 }
 
-// ---------------------------------------------------------------------------
-// Transport
-// ---------------------------------------------------------------------------
-
 /**
  * Calls GetAppReviews once with `input` as its input_json, and the key, when
  * one is set, as its own parameter. Returns the parsed page. Throws a
@@ -522,14 +665,18 @@ export async function fetchPage(
   url.searchParams.set("input_json", JSON.stringify(input));
   if (globalArgs.key !== undefined) url.searchParams.set("key", globalArgs.key);
   const label = `GetAppReviews for app ${globalArgs.appId}`;
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
   let response: Response;
   try {
     response = await fetch(url, {
       method: "GET",
       headers: { Accept: "application/json" },
-      signal,
+      signal: combined,
     });
   } catch (error) {
+    // A cancelled run stays a cancellation; anything else, a request that
+    // outlived the timeout included, is the network.
     if (signal?.aborted) throw error;
     // A network error's message can quote the URL, and the URL carries the
     // key: report the failure without it.
@@ -591,6 +738,226 @@ function filtersOf(args: ReviewFilters): ReviewFilters {
 }
 
 // ---------------------------------------------------------------------------
+// appreviews: transport and history for sample and summarise
+// ---------------------------------------------------------------------------
+
+/** The data name an app's samples are written under. */
+export function sampleName(appId: number): string {
+  return `app-${appId}`;
+}
+
+/** The data name an app's summary is written under. */
+export function summaryName(appId: number): string {
+  return `summary-${appId}`;
+}
+
+/** The URL `sample` requests for one app: every language and purchase type, no review bodies. */
+export function reviewsUrl(appId: number): string {
+  const url = new URL(`${REVIEWS_URL}${appId}`);
+  url.searchParams.set("json", "1");
+  url.searchParams.set("language", "all");
+  url.searchParams.set("purchase_type", "all");
+  url.searchParams.set("num_per_page", "0");
+  return url.toString();
+}
+
+/**
+ * Positive reviews over positive and negative reviews, or null when there are
+ * none to divide by.
+ */
+export function positiveRatio(
+  totalPositive: number,
+  totalNegative: number,
+): number | null {
+  const rated = totalPositive + totalNegative;
+  return rated === 0 ? null : totalPositive / rated;
+}
+
+/** A non-negative integer field of `query_summary`, or undefined when it is not one. */
+function count(
+  fields: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = fields[key];
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+/**
+ * Reads one app's review score and counts from Steam. Throws a specific error
+ * for a network failure, a rate limit, a server error, a response Steam marks
+ * unsuccessful, or a body that is not the documented shape.
+ */
+export async function fetchReviews(
+  fetcher: Fetcher,
+  appId: number,
+  signal?: AbortSignal,
+): Promise<Reviews> {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const where = `appreviews for app ${appId}`;
+  let response: Response;
+  try {
+    response = await fetcher(reviewsUrl(appId), {
+      method: "GET",
+      headers: { accept: "application/json" },
+      signal: combined,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`${where}: request failed: ${detail}`);
+  }
+  if (response.status === 429) {
+    await response.body?.cancel();
+    const retryAfter = response.headers.get("retry-after");
+    throw new Error(
+      `${where}: Steam rate limited the request (HTTP 429)` +
+        (retryAfter ? `, retry after ${retryAfter} seconds` : ""),
+    );
+  }
+  if (response.status >= 500) {
+    const text = await response.text();
+    throw new Error(
+      `${where}: Steam is unavailable (HTTP ${response.status}), a transient failure, retry later: ${
+        text.slice(0, 200)
+      }`,
+    );
+  }
+  const text = await response.text();
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw new Error(
+      `${where}: HTTP ${response.status}, body is not JSON: ${
+        text.slice(0, 200)
+      }`,
+    );
+  }
+  const top = body !== null && typeof body === "object"
+    ? body as Record<string, unknown>
+    : undefined;
+  if (top === undefined) {
+    throw new Error(
+      `${where}: HTTP ${response.status}, unexpected response ${
+        text.slice(0, 200)
+      }`,
+    );
+  }
+  if (top.success !== 1) {
+    throw new Error(
+      `${where}: Steam reported no reviews for this app (HTTP ${response.status}, success ${
+        JSON.stringify(top.success)
+      }); check that the app id exists on Steam`,
+    );
+  }
+  const summary = top.query_summary;
+  const fields = summary !== null && typeof summary === "object"
+    ? summary as Record<string, unknown>
+    : undefined;
+  if (!response.ok || fields === undefined) {
+    throw new Error(
+      `${where}: HTTP ${response.status}, no "query_summary" object in ${
+        text.slice(0, 200)
+      }`,
+    );
+  }
+  const reviewScore = count(fields, "review_score");
+  const totalPositive = count(fields, "total_positive");
+  const totalNegative = count(fields, "total_negative");
+  const totalReviews = count(fields, "total_reviews");
+  const reviewScoreDesc = fields.review_score_desc;
+  if (
+    reviewScore === undefined || totalPositive === undefined ||
+    totalNegative === undefined || totalReviews === undefined ||
+    typeof reviewScoreDesc !== "string"
+  ) {
+    throw new Error(
+      `${where}: HTTP ${response.status}, unexpected query_summary ${
+        JSON.stringify(fields).slice(0, 200)
+      }`,
+    );
+  }
+  return {
+    reviewScore,
+    reviewScoreDesc,
+    totalPositive,
+    totalNegative,
+    totalReviews,
+  };
+}
+
+/**
+ * Summarises samples: the first and latest by recording time, the minimum and
+ * maximum positive ratio among samples that have reviews (the earliest on a
+ * tie), and the latest minus the first. Throws when there are no samples.
+ */
+export function summarise(
+  appId: number,
+  samples: readonly Sample[],
+  since: string | null,
+  summarisedAt: string,
+): Summary {
+  const ordered = [...samples].sort((a, b) =>
+    Date.parse(a.sampledAt) - Date.parse(b.sampledAt)
+  );
+  const first = ordered[0];
+  const latest = ordered[ordered.length - 1];
+  if (first === undefined || latest === undefined) {
+    throw new Error(`No samples to summarise for app ${appId}`);
+  }
+  const point = (sample: Sample): Point => ({
+    reviewScore: sample.reviewScore,
+    reviewScoreDesc: sample.reviewScoreDesc,
+    totalPositive: sample.totalPositive,
+    totalNegative: sample.totalNegative,
+    totalReviews: sample.totalReviews,
+    positiveRatio: sample.positiveRatio,
+    sampledAt: sample.sampledAt,
+  });
+  let min: Sample | null = null;
+  let max: Sample | null = null;
+  for (const sample of ordered) {
+    const ratio = sample.positiveRatio;
+    if (ratio === null) {
+      continue;
+    }
+    if (
+      min === null || min.positiveRatio === null || ratio < min.positiveRatio
+    ) {
+      min = sample;
+    }
+    if (
+      max === null || max.positiveRatio === null || ratio > max.positiveRatio
+    ) {
+      max = sample;
+    }
+  }
+  const ratioChange =
+    first.positiveRatio === null || latest.positiveRatio === null
+      ? null
+      : latest.positiveRatio - first.positiveRatio;
+  return {
+    appId,
+    samples: ordered.length,
+    since,
+    first: point(first),
+    latest: point(latest),
+    min: min === null ? null : point(min),
+    max: max === null ? null : point(max),
+    change: {
+      positiveRatio: ratioChange,
+      reviewScore: latest.reviewScore - first.reviewScore,
+      totalPositive: latest.totalPositive - first.totalPositive,
+      totalNegative: latest.totalNegative - first.totalNegative,
+      totalReviews: latest.totalReviews - first.totalReviews,
+    },
+    summarisedAt,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Behavior
 // ---------------------------------------------------------------------------
 
@@ -603,32 +970,46 @@ export const behavior = {
   // String literals, not constants: the registry catalog reads them from the
   // source.
   type: "@reset/steam-reviews",
-  version: "2026.10.21.1",
+  version: "2026.10.30.1",
   globalArguments: GlobalArgsSchema,
   resources: {
-    summary: {
-      description: "The app's review score and positive, negative and total " +
-        "counts, as Steam reports them for the filters",
-      schema: SummaryResourceSchema,
+    score: {
+      description:
+        "The app's review score and positive, negative and total counts, as GetAppReviews reports them for the filters",
+      schema: ScoreResourceSchema,
       lifetime: "infinite",
       garbageCollection: 90,
     },
     recent: {
-      description: "Reviews created in a window: counts overall and by " +
-        "language, and each review's id, vote, time and language",
+      description:
+        "Reviews created in a window: counts overall and by language, and each review's id, vote, time and language",
       schema: RecentResourceSchema,
       lifetime: "30d",
+      garbageCollection: 10,
+    },
+    sample: {
+      description:
+        "One app's review score and review counts at one moment; every sample is a new version",
+      schema: SampleSchema,
+      lifetime: "infinite",
+      garbageCollection: "365d",
+    },
+    summary: {
+      description:
+        "The first, latest, minimum and maximum positive ratio of an app's recorded samples and the change between first and latest",
+      schema: SummarySchema,
+      lifetime: "infinite",
       garbageCollection: 10,
     },
   },
   methods: {
     summary: {
-      description: "Read the app's review score and totals with one " +
-        "GetAppReviews call. Writes summary.",
+      description:
+        "Read the app's review score and totals for a set of filters with one GetAppReviews call. Writes score.",
       arguments: SummaryArgsSchema,
       execute: async (
         args: SummaryArgs,
-        context: Context,
+        context: MethodContext,
       ): Promise<MethodResult> => {
         const { globalArgs, signal, logger } = context;
         const filters = filtersOf(args);
@@ -658,7 +1039,7 @@ export const behavior = {
             200,
           );
         }
-        const handle = await context.writeResource("summary", "summary", {
+        const handle = await context.writeResource("score", "score", {
           fetchedAt: new Date().toISOString(),
           appId: globalArgs.appId,
           filters,
@@ -677,13 +1058,12 @@ export const behavior = {
       },
     },
     recent: {
-      description: "Page through the reviews created in a window, newest " +
-        "first, and count positive and negative overall and by language. " +
-        "Writes recent.",
+      description:
+        "Page through the reviews created in a window, newest first, and count positive and negative overall and by language. Writes recent.",
       arguments: RecentArgsSchema,
       execute: async (
         args: RecentArgs,
-        context: Context,
+        context: MethodContext,
       ): Promise<MethodResult> => {
         const { globalArgs, signal, logger } = context;
         const filters = filtersOf(args);
@@ -791,5 +1171,140 @@ export const behavior = {
         return { dataHandles: [handle] };
       },
     },
+    sample: {
+      description:
+        "Read the app's review score and counts from Steam's public store endpoint and record them as a new version",
+      arguments: SampleArgsSchema,
+      execute: async (
+        args: Injected,
+        context: MethodContext,
+      ): Promise<MethodResult> => {
+        const { globalArgs, logger } = context;
+        const fetcher = args._fetch ?? globalThis.fetch;
+        const now = args._now ?? (() => new Date());
+        logger.info("Reading the review summary of app {appId}", {
+          appId: globalArgs.appId,
+        });
+        const reviews = await fetchReviews(
+          fetcher,
+          globalArgs.appId,
+          context.signal,
+        );
+        const data: Sample = {
+          appId: globalArgs.appId,
+          ...reviews,
+          positiveRatio: positiveRatio(
+            reviews.totalPositive,
+            reviews.totalNegative,
+          ),
+          sampledAt: now().toISOString(),
+        };
+        const handle = await context.writeResource(
+          "sample",
+          sampleName(globalArgs.appId),
+          { ...data },
+        );
+        logger.info(
+          "App {appId} is {reviewScoreDesc}: {totalPositive} positive, {totalNegative} negative of {totalReviews} reviews",
+          {
+            appId: globalArgs.appId,
+            reviewScoreDesc: data.reviewScoreDesc,
+            totalPositive: data.totalPositive,
+            totalNegative: data.totalNegative,
+            totalReviews: data.totalReviews,
+          },
+        );
+        return { dataHandles: [handle] };
+      },
+    },
+    summarise: {
+      description:
+        "Summarise the recorded samples: count, first, latest, minimum and maximum positive ratio and the change over the period",
+      arguments: SummariseArgsSchema,
+      execute: async (
+        args: SummariseArgs & Injected,
+        context: MethodContext,
+      ): Promise<MethodResult> => {
+        const { globalArgs, logger } = context;
+        const now = args._now ?? (() => new Date());
+        const since = args.since ?? null;
+        if (context.queryData === undefined) {
+          throw new Error(
+            "summarise needs swamp's queryData to read the recorded samples; upgrade swamp",
+          );
+        }
+        logger.info("Reading the recorded samples of app {appId}", {
+          appId: globalArgs.appId,
+        });
+        const name = sampleName(globalArgs.appId);
+        const predicate = `modelId == ${JSON.stringify(context.modelId)} && ` +
+          `specName == "sample" && name == ${
+            JSON.stringify(name)
+          } && version >= 0`;
+        const records = await context.queryData(predicate);
+        const sinceMs = since === null ? -Infinity : Date.parse(since);
+        const samples: Sample[] = [];
+        let skipped = 0;
+        for (const record of records) {
+          const attributes = record !== null && typeof record === "object"
+            ? (record as Partial<DataRecord>).attributes
+            : undefined;
+          const parsed = SampleSchema.safeParse(attributes);
+          if (!parsed.success || parsed.data.appId !== globalArgs.appId) {
+            skipped += 1;
+            continue;
+          }
+          if (Date.parse(parsed.data.sampledAt) >= sinceMs) {
+            samples.push(parsed.data);
+          }
+        }
+        if (skipped > 0) {
+          logger.warning(
+            "Skipped {skipped} stored samples that are not a sample of app {appId}",
+            { skipped, appId: globalArgs.appId },
+          );
+        }
+        if (samples.length === 0) {
+          throw new Error(
+            `No samples of app ${globalArgs.appId} recorded` +
+              (since === null ? "" : ` since ${since}`) +
+              "; run the sample method first",
+          );
+        }
+        const data = summarise(
+          globalArgs.appId,
+          samples,
+          since,
+          now().toISOString(),
+        );
+        const handle = await context.writeResource(
+          "summary",
+          summaryName(globalArgs.appId),
+          { ...data },
+        );
+        logger.info(
+          "Summarised {samples} samples of app {appId}: positive ratio {first} to {latest}, change {change}",
+          {
+            samples: data.samples,
+            appId: globalArgs.appId,
+            first: data.first.positiveRatio,
+            latest: data.latest.positiveRatio,
+            change: data.change.positiveRatio,
+          },
+        );
+        return { dataHandles: [handle] };
+      },
+    },
   },
+  upgrades: [
+    {
+      toVersion: "2026.10.30.1",
+      description:
+        "Joins the two lines of this extension: instances made on 2026.10.21.1 (summary, recent) and on 2026.10.22.x (sample, summarise) keep their appId and optional key as written, and every method is available to both; the summary method now writes the score resource",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => old,
+    },
+  ],
 };

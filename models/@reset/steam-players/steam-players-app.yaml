@@ -1,0 +1,9 @@
+type: '@reset/steam-players'
+typeVersion: 2026.10.30.1
+id: bbad6531-9213-49b0-909a-90ce0dd97b8c
+name: steam-players-app
+version: 1
+tags: {}
+globalArguments:
+  appId: 440
+methods: {}

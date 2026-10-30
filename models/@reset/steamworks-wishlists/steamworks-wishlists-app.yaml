@@ -1,0 +1,10 @@
+type: '@reset/steamworks-wishlists'
+typeVersion: 2026.10.30.1
+id: 7ea8180d-cef1-44ed-95b3-ea96c0ef4031
+name: steamworks-wishlists-app
+version: 1
+tags: {}
+globalArguments:
+  apiKey: '${{ vault.get(default, steam-financial-api-key) }}'
+  appId: 480
+methods: {}

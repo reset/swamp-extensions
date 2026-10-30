@@ -1,0 +1,10 @@
+type: '@reset/steamworks-builds'
+typeVersion: 2026.10.30.1
+id: 5ca7bbbb-60e9-40f5-ade8-007edb38e1e5
+name: steamworks-builds-app
+version: 1
+tags: {}
+globalArguments:
+  apiKey: '${{ vault.get(default, STEAM_WEB_API_KEY) }}'
+  appId: 480
+methods: {}
