@@ -1,0 +1,35 @@
+id: 232665d4-ca5d-4103-abb9-648212e9c9ef
+name: steam-achievements-trend
+description: |-
+  Sample a Steam app's global achievement unlock rates and summarise them:
+  the rarest and most common, and the ones an update added or removed.
+version: 1
+tags: {}
+inputs:
+  properties:
+    instance:
+      type: string
+      default: steam-achievements-app
+      description: |-
+        The @reset/steam-achievements instance under models/ naming the app
+  required: []
+jobs:
+  - name: trend
+    description: Sample the unlock rates, then summarise every sample
+    steps:
+      - name: sample
+        description: Record every achievement's global unlock percentage
+        task:
+          type: behavior
+          behavior: ${{ inputs.instance }}
+          methodName: sample
+      - name: summarise
+        description: Rarest, most common, added, removed and each one's change
+        dependsOn:
+          - step: sample
+            condition:
+              type: succeeded
+        task:
+          type: behavior
+          behavior: ${{ inputs.instance }}
+          methodName: summarise

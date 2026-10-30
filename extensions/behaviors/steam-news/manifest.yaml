@@ -1,12 +1,10 @@
 manifestVersion: 1
 name: "@reset/steam-news"
-version: "2026.10.21.1"
+version: "2026.10.30.1"
 license: MIT
-description: |-
-  Read a Steam app's news through the Steam Web API's GetNewsForApp (or
-  GetNewsForAppAuthed with a publisher key): list the newest posts by feed,
-  and check that a post naming a release's version went out since a date,
-  each written as a resource a workflow can assert on.
+description: Find a Steam app's release post, and record and list its news.
+# The public home of every @reset extension (decided October 20, 2026); the
+# quality factor repository-verified credits it once the repository exists.
 repository: https://github.com/reset/swamp-extensions
 paths:
   base: manifest
@@ -19,5 +17,7 @@ labels:
   - steam
   - game-development
   - publishing
+  - news
+  - monitoring
 # Empty: the behavior is plain fetch and runs wherever swamp does.
 platforms: []

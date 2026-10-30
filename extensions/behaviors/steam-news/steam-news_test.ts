@@ -1,6 +1,7 @@
 /**
- * Unit tests for the Steam news behavior. Every request goes through a mocked
- * fetch: nothing here touches the network.
+ * Unit tests for the Steam news behavior's `news` and `find` methods; `fetch`
+ * and `list` are tested in steam-news_history_test.ts. Every request goes
+ * through a mocked fetch: nothing here touches the network.
  */
 
 import {
@@ -17,27 +18,32 @@ import {
 } from "jsr:@swamp-club/swamp-testing@0.20261016.58";
 import {
   behavior,
-  type Context,
   type GlobalArgs,
   matchItem,
+  type MethodContext,
   normalizeItem,
   SteamNewsError,
 } from "./steam-news.ts";
 
 const APP = 480;
 const KEY = "publisher-key-for-tests";
+const MODEL_ID = "00000000-0000-4000-8000-000000000480";
 const ANN = "steam_community_announcements";
 const SINCE = "2026-10-01T00:00:00Z";
 const SINCE_UNIX = Date.parse(SINCE) / 1000;
 
 function testContext(overrides: Partial<GlobalArgs> = {}): {
-  context: Context;
+  context: MethodContext;
   getWrittenResources: ModelTestContextResult["getWrittenResources"];
   getLogs: ModelTestContextResult["getLogs"];
 } {
   const globalArgs: GlobalArgs = { appId: APP, ...overrides };
   const result = createModelTestContext({ globalArgs: { ...globalArgs } });
-  const context: Context = { ...result.context, globalArgs };
+  const context: MethodContext = {
+    ...result.context,
+    globalArgs,
+    modelId: MODEL_ID,
+  };
   return {
     context,
     getWrittenResources: result.getWrittenResources,
@@ -160,7 +166,7 @@ Deno.test("news calls the public method and drops bodies and authors", async () 
   assertEquals(calls[0].headers["x-webapi-key"], undefined);
 
   const [written] = getWrittenResources();
-  assertEquals(written.specName, "news");
+  assertEquals(written.specName, "posts");
   const data = written.data as Record<string, unknown>;
   assertEquals(data.count, 2);
   assertEquals(data.totalCount, 40);
@@ -170,7 +176,7 @@ Deno.test("news calls the public method and drops bodies and authors", async () 
   assertEquals(items[0].gid, "2");
   assertEquals(items[0].author, undefined);
   assertEquals(items[0].contents, undefined);
-  assert(behavior.resources.news.schema.safeParse(data).success);
+  assert(behavior.resources.posts.schema.safeParse(data).success);
 });
 
 Deno.test("news keeps bodies and authors when asked, and passes before", async () => {

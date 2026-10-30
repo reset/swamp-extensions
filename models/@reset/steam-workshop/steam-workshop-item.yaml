@@ -1,0 +1,9 @@
+type: '@reset/steam-workshop'
+typeVersion: 2026.10.30.1
+id: da710159-ad65-4865-8072-cc14ed0b8569
+name: steam-workshop-item
+version: 1
+tags: {}
+globalArguments:
+  itemId: '104691717'
+methods: {}

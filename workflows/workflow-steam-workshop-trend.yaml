@@ -1,0 +1,35 @@
+id: bbd00454-bae1-4536-a887-d39a665a11e2
+name: steam-workshop-trend
+description: |-
+  Sample a Steam Workshop item's public counts (subscriptions, favourites,
+  views) and summarise how they changed, for a studio's official item.
+version: 1
+tags: {}
+inputs:
+  properties:
+    instance:
+      type: string
+      default: steam-workshop-item
+      description: |-
+        The @reset/steam-workshop instance under models/ naming the item
+  required: []
+jobs:
+  - name: trend
+    description: Sample the item's counts, then summarise every sample
+    steps:
+      - name: sample
+        description: Record the item's public counts
+        task:
+          type: behavior
+          behavior: ${{ inputs.instance }}
+          methodName: sample
+      - name: summarise
+        description: The change in each count since the first sample
+        dependsOn:
+          - step: sample
+            condition:
+              type: succeeded
+        task:
+          type: behavior
+          behavior: ${{ inputs.instance }}
+          methodName: summarise

@@ -1,0 +1,54 @@
+id: 6d38fa85-0bff-4a7c-9105-2e1e84cfc7a1
+name: steam-build-live
+description: |-
+  Check that a steam-promote landing took: the branch now runs the build.
+version: 1
+tags: {}
+inputs:
+  properties:
+    buildId:
+      type: integer
+      description: The BuildID steam-promote set live
+    branch:
+      type: string
+      default: beta
+      description: The branch it was set live on. public is the default branch.
+    appId:
+      type: integer
+      default: 480
+      description: |-
+        The instance's appId, which names its record (builds-<appId>)
+    instance:
+      type: string
+      default: steamworks-builds-app
+      description: |-
+        The @reset/steamworks-builds instance under models/ naming the app
+  required:
+    - buildId
+jobs:
+  - name: landed
+    description: Read the branches, assert the branch runs the build
+    steps:
+      - name: sample
+        description: Record the app's branches and recent builds
+        task:
+          type: behavior
+          behavior: ${{ inputs.instance }}
+          methodName: sample
+      - name: branch-runs-build
+        description: The branch's live build is the one promoted
+        dependsOn:
+          - step: sample
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: |-
+            data.latest(inputs.instance, "builds-" + string(inputs.appId))
+              .attributes.branches.exists(b,
+                b.name == inputs.branch &&
+                int(b.buildId) == int(inputs.buildId))
+          message: |-
+            Branch ${{ inputs.branch }} does not run build
+            ${{ inputs.buildId }}
+          severity: high

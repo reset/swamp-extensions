@@ -1,6 +1,7 @@
 /**
- * Unit tests for the Steam reviews behavior. Every request goes through a
- * mocked fetch: nothing here touches the network.
+ * Unit tests for the Steam reviews behavior's `summary` and `recent` methods;
+ * `sample` and `summarise` are tested in steam-reviews_history_test.ts. Every
+ * request goes through a mocked fetch: nothing here touches the network.
  */
 
 import {
@@ -17,9 +18,9 @@ import {
 } from "jsr:@swamp-club/swamp-testing@0.20261016.58";
 import {
   behavior,
-  type Context,
   countReviews,
   type GlobalArgs,
+  type MethodContext,
   normalizeReview,
   parsePage,
   type RecentArgs,
@@ -31,17 +32,22 @@ import {
 
 const APP_ID = 480;
 const KEY = "publisher-key-for-tests";
+const MODEL_ID = "00000000-0000-4000-8000-000000000480";
 const UNTIL = 1_800_000_000;
 const DAY = 86_400;
 
 function testContext(overrides: Partial<GlobalArgs> = {}): {
-  context: Context;
+  context: MethodContext;
   getWrittenResources: ModelTestContextResult["getWrittenResources"];
   getLogs: ModelTestContextResult["getLogs"];
 } {
   const globalArgs: GlobalArgs = { appId: APP_ID, ...overrides };
   const result = createModelTestContext({ globalArgs: { ...globalArgs } });
-  const context: Context = { ...result.context, globalArgs };
+  const context: MethodContext = {
+    ...result.context,
+    globalArgs,
+    modelId: MODEL_ID,
+  };
   return {
     context,
     getWrittenResources: result.getWrittenResources,
@@ -167,14 +173,14 @@ Deno.test("summary reads the score fields and writes summary", async () => {
   });
   const written = getWrittenResources();
   assertEquals(written.length, 1);
-  assertEquals([written[0].specName, written[0].name], ["summary", "summary"]);
+  assertEquals([written[0].specName, written[0].name], ["score", "score"]);
   const data = written[0].data as Record<string, unknown>;
   assertEquals(data.reviewScore, 8);
   assertEquals(data.reviewScoreDesc, "Very Positive");
   assertEquals(data.totalReviews, 1000);
   assertEquals(data.positiveShare, 0.9);
   assertEquals(data.appId, APP_ID);
-  behavior.resources.summary.schema.parse(data);
+  behavior.resources.score.schema.parse(data);
 });
 
 Deno.test("summary maps purchase type and off-topic options", async () => {

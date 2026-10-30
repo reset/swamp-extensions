@@ -1,0 +1,38 @@
+id: d78e146f-4eeb-4d26-b00e-3195367c17ab
+name: steam-sales-daily
+description: |-
+  Record the sales dates Steam changed since the last run, as daily
+  aggregates by app and country, and summarise every date recorded.
+version: 1
+tags: {}
+inputs:
+  properties:
+    instance:
+      type: string
+      default: steamworks-sales-partner
+      description: |-
+        The @reset/steamworks-sales instance under models/ naming the
+        partner's financial key
+  required: []
+jobs:
+  - name: record
+    description: Record the changed dates, then summarise everything recorded
+    steps:
+      - name: sample
+        description: |-
+          Record up to 31 changed dates; the cursor keeps the rest for the
+          next run
+        task:
+          type: behavior
+          behavior: ${{ inputs.instance }}
+          methodName: sample
+      - name: summarise
+        description: Units, net sales, trend, and totals by app and country
+        dependsOn:
+          - step: sample
+            condition:
+              type: succeeded
+        task:
+          type: behavior
+          behavior: ${{ inputs.instance }}
+          methodName: summarise

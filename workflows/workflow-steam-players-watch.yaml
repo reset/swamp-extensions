@@ -1,0 +1,59 @@
+id: 729516b1-55cb-4a5e-be26-c383d8a5fbcf
+name: steam-players-watch
+description: |-
+  Sample a Steam app's concurrent players, summarise the history, and fail
+  when the count falls below a floor, as after a release that breaks the game.
+version: 1
+tags: {}
+inputs:
+  properties:
+    minPlayers:
+      type: integer
+      default: 0
+      description: The run fails when fewer players than this are in the game
+    appId:
+      type: integer
+      default: 440
+      description: |-
+        The instance's appId, which names its record (app-<appId>)
+    instance:
+      type: string
+      default: steam-players-app
+      description: |-
+        The @reset/steam-players instance under models/ naming the app
+  required: []
+jobs:
+  - name: watch
+    description: Sample, summarise, assert the count is above the floor
+    steps:
+      - name: sample
+        description: Record the current concurrent player count
+        task:
+          type: behavior
+          behavior: ${{ inputs.instance }}
+          methodName: sample
+      - name: summarise
+        description: First, latest, minimum and maximum of every sample
+        dependsOn:
+          - step: sample
+            condition:
+              type: succeeded
+        task:
+          type: behavior
+          behavior: ${{ inputs.instance }}
+          methodName: summarise
+      - name: above-floor
+        description: The latest sample holds at least minPlayers players
+        dependsOn:
+          - step: sample
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: |-
+            int(data.latest(inputs.instance, "app-" + string(inputs.appId))
+              .attributes.playerCount) >= int(inputs.minPlayers)
+          message: |-
+            Fewer than ${{ inputs.minPlayers }} players are in app
+            ${{ inputs.appId }}
+          severity: high

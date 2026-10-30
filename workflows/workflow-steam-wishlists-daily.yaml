@@ -1,0 +1,35 @@
+id: d064ec0d-ef7e-47f9-83ad-62391f12c1f0
+name: steam-wishlists-daily
+description: |-
+  Record a Steam app's wishlist activity for yesterday and today and
+  summarise every date recorded, the counts Steamworks' wishlist report shows.
+version: 1
+tags: {}
+inputs:
+  properties:
+    instance:
+      type: string
+      default: steamworks-wishlists-app
+      description: |-
+        The @reset/steamworks-wishlists instance under models/ naming the app
+  required: []
+jobs:
+  - name: record
+    description: Record the dates, then summarise everything recorded
+    steps:
+      - name: sample
+        description: Record the wishlist adds, deletes and purchases per date
+        task:
+          type: behavior
+          behavior: ${{ inputs.instance }}
+          methodName: sample
+      - name: summarise
+        description: Totals, average adds, trend and best and worst day
+        dependsOn:
+          - step: sample
+            condition:
+              type: succeeded
+        task:
+          type: behavior
+          behavior: ${{ inputs.instance }}
+          methodName: summarise

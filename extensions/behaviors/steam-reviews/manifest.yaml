@@ -1,13 +1,10 @@
 manifestVersion: 1
 name: "@reset/steam-reviews"
-version: "2026.10.21.1"
+version: "2026.10.30.1"
 license: MIT
-description: |-
-  Read a Steam app's public user reviews through Steamworks' documented
-  IUserReviewsService/GetAppReviews: the review score and totals, and the
-  reviews created in a window counted positive and negative overall and by
-  language, each written as a resource a workflow can assert on. Keeps
-  review ids and votes, not authors or text, unless asked.
+description: Read a Steam app's reviews and score, and record the score's trend.
+# The public home of every @reset extension (decided October 20, 2026); the
+# quality factor repository-verified credits it once the repository exists.
 repository: https://github.com/reset/swamp-extensions
 paths:
   base: manifest
@@ -20,6 +17,7 @@ labels:
   - steam
   - game-development
   - reviews
-  - observability
+  - analytics
+  - monitoring
 # Empty: the behavior is plain fetch and runs wherever swamp does.
 platforms: []
