@@ -1,12 +1,8 @@
 manifestVersion: 1
 name: "@reset/itch"
-version: "2026.10.21.1"
+version: "2026.10.31.1"
 license: MIT
-description: |-
-  Publish a game's builds to itch.io with butler: push a directory or zip
-  to a channel, read each channel's latest and pending build and wait for
-  processing to finish, and read a channel's latest version from the public
-  update check, each written as a resource a workflow can assert on.
+description: Push builds to itch.io with butler, and record games and versions.
 repository: https://github.com/reset/swamp-extensions
 paths:
   base: manifest
@@ -16,9 +12,11 @@ additionalFiles:
   - README.md
   - LICENSE
 # Empty means every platform: butler runs on Linux, macOS and Windows, and
-# the update check needs only the network.
+# the API methods need only the network.
 platforms: []
 labels:
   - itch
   - game-development
   - publishing
+  - analytics
+  - monitoring

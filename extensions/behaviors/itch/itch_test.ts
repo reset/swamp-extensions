@@ -660,7 +660,7 @@ Deno.test("latest on a private game or unknown channel fails with itch.io's reas
           .fetcher,
       }, ctx),
     Error,
-    "HTTP 404: invalid channel",
+    "(HTTP 404): invalid channel",
   );
 });
 
@@ -742,7 +742,7 @@ Deno.test("the global arguments reject a target with a channel and mark the key 
   assert(!schema.safeParse({ target: "game" }).success);
   const parsed = schema.parse({ target: "studio/game" });
   assertEquals(parsed.butler, "butler");
-  const meta = schema.shape.apiKey.unwrap().meta();
+  const meta = schema.shape.apiKey.meta();
   assertEquals(meta?.sensitive, true);
 });
 
