@@ -28,6 +28,7 @@ import {
   type Pull,
   renderMarkdown,
 } from "./patch-notes.ts";
+import source from "./patch-notes.ts" with { type: "text" };
 
 const GITHUB: GlobalArgs = {
   forge: "github",
@@ -156,6 +157,117 @@ Deno.test("forgejo needs an apiUrl", () => {
     assert(error instanceof ForgeError);
     assertStringIncludes(error.message, "apiUrl is required");
   }
+});
+
+Deno.test("the upgrade to 2026.10.31.1 keeps a drafter instance's arguments", () => {
+  const upgrade = behavior.upgrades[behavior.upgrades.length - 1];
+  assertEquals(upgrade.toVersion, behavior.version);
+  const minimal = { owner: "example-studio", repo: "example-game" };
+  const github = { ...minimal, forge: "github", base: "main" };
+  const forgejo = {
+    forge: "forgejo",
+    apiUrl: "https://forge.example.com/api/v1",
+    owner: "example-studio",
+    repo: "example-game",
+    base: "release",
+    token: "${{ vault.get(default, forge-read-token) }}",
+    labelPrefix: "notes:",
+    keepAuthors: true,
+  };
+  for (const old of [minimal, github, forgejo]) {
+    const written = structuredClone(old);
+    const upgraded = upgrade.upgradeAttributes(old);
+    assertEquals(upgraded, written);
+    assertEquals(old, written);
+    assert(behavior.globalArguments.safeParse(upgraded).success);
+  }
+});
+
+Deno.test("the upgrade refuses arguments the drafter never took, naming the change", () => {
+  const upgrade = behavior.upgrades[behavior.upgrades.length - 1];
+  const announcer = {
+    appId: 440,
+    webhookUrl: "${{ vault.get(notifications, patch-notes-webhook) }}",
+  };
+  const error = (() => {
+    try {
+      upgrade.upgradeAttributes(announcer);
+    } catch (thrown) {
+      return thrown as Error;
+    }
+    throw new Error("expected the upgrade to throw");
+  })();
+  assertStringIncludes(
+    error.message,
+    "does not take (appId, webhookUrl) and no owner or repo",
+  );
+  assertStringIncludes(error.message, "no owner or repo");
+  assertStringIncludes(error.message, "2026.10.22.1");
+  assertStringIncludes(error.message, "@reset/steam-news");
+
+  const stray = { owner: "o", repo: "r", appId: 440 };
+  const strayError = (() => {
+    try {
+      upgrade.upgradeAttributes(stray);
+    } catch (thrown) {
+      return thrown as Error;
+    }
+    throw new Error("expected the upgrade to throw");
+  })();
+  assertStringIncludes(strayError.message, "does not take (appId).");
+  assertFalse(strayError.message.includes("no owner"));
+
+  const missingRepo = (() => {
+    try {
+      upgrade.upgradeAttributes({ owner: "o" });
+    } catch (thrown) {
+      return thrown as Error;
+    }
+    throw new Error("expected the upgrade to throw");
+  })();
+  assertStringIncludes(missingRepo.message, "no repo");
+});
+
+Deno.test("every argument's description is written where the registry reads it", () => {
+  // swamp's registry reads argument descriptions from the source text: a field
+  // that starts `name: z.<type>(` and carries `.describe("...")` with a string
+  // literal. A field split as `name: z` then `.string()` on the next line is
+  // left out of the registry's argument list.
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const schemas: { shape: Record<string, { description?: string }> }[] = [
+    behavior.globalArguments,
+    ...Object.values(behavior.methods).map((method) => method.arguments),
+  ];
+  const unread: string[] = [];
+  for (const schema of schemas) {
+    for (const [name, field] of Object.entries(schema.shape)) {
+      const description = field.description;
+      const starts = new RegExp(`(?<![.\\w])${name}:\\s*z\\.\\w+\\(`);
+      const described = description !== undefined && new RegExp(
+        `\\.describe\\(\\s*${escape(JSON.stringify(description))}`,
+      ).test(source);
+      if (!described || !starts.test(source)) {
+        unread.push(name);
+      }
+    }
+  }
+  assertEquals(unread, []);
+});
+
+Deno.test("resource times must be ISO date-times", () => {
+  const bbcode = {
+    createdAt: "2026-10-31T00:00:00.000Z",
+    source: "argument",
+    length: 0,
+    bbcode: "",
+  };
+  assert(behavior.resources.bbcode.schema.safeParse(bbcode).success);
+  assertFalse(
+    behavior.resources.bbcode.schema.safeParse({
+      ...bbcode,
+      createdAt: "October 31",
+    }).success,
+  );
 });
 
 Deno.test("gather on github keeps merges in (start, end] and stops at start", async () => {
