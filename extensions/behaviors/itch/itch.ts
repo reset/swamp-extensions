@@ -1,21 +1,57 @@
 /**
- * Publish a game's builds to itch.io with butler, the command line tool
+ * itch.io from Swamp, in two halves that share one behavior type.
+ *
+ * The butler half publishes a game's builds with butler, the command line tool
  * itch.io documents for uploads. `push` uploads a directory or zip to a
  * channel, `status` reads the channels of a project and the state of their
  * latest and pending builds (optionally waiting, within a deadline, until a
- * channel's build has finished processing), `latest` reads a channel's latest
- * user version from itch.io's public update check endpoint, and `version`
- * records which butler ran. Each method writes what it saw as a swamp
- * resource. The process runner, `fetch`, the clock and the sleep are
- * injectable, so the unit tests run without butler or the network.
+ * channel's build has finished processing), and `version` records which butler
+ * ran.
+ *
+ * The API half records an account's games through itch.io's server-side API
+ * and says what changed since the last recorded version. `games` reads
+ * `GET https://api.itch.io/profile/games`, every game the API key's owner can
+ * edit, and writes their publish state, price and counts with the differences
+ * from the previous version. `credentials` reads
+ * `GET https://api.itch.io/credentials/info`, the key's type and scopes.
+ *
+ * `latest` belongs to both: it reads a channel's latest user version from
+ * itch.io's public update check, `GET https://api.itch.io/wharf/latest`, which
+ * needs no key. With a `gameId` it records the channel by game id and whether
+ * the version moved; without one it reads the `target` project's channel.
+ *
+ * The API key is a sensitive global argument, supplied from a swamp vault.
+ * butler gets it as `BUTLER_API_KEY`, never on its command line; `games` and
+ * `credentials` send it only in the `Authorization: Bearer` header, never in a
+ * URL. It is redacted from butler's output and never written to a resource or
+ * a log. The process runner, `fetch`, the clock and the sleep are injectable,
+ * so the unit tests run without butler or the network.
  *
  * @module
  */
 
 import { z } from "npm:zod@4";
 
+/** Base URL of itch.io's server-side API. */
+export const API_BASE = "https://api.itch.io";
+
+/** The endpoint listing the key owner's games (scope `profile:games`). */
+export const GAMES_URL = `${API_BASE}/profile/games`;
+
+/** The endpoint describing the credentials of the request. */
+export const CREDENTIALS_URL = `${API_BASE}/credentials/info`;
+
 /** itch.io's documented update check endpoint, which needs no credentials. */
-const WHARF_LATEST = "https://api.itch.io/wharf/latest";
+export const WHARF_LATEST_URL = `${API_BASE}/wharf/latest`;
+
+/** How long one request to itch.io may take before it is abandoned. */
+export const REQUEST_TIMEOUT_MS = 15_000;
+
+/** The data name the key owner's games are written under. */
+export const GAMES_NAME = "my-games";
+
+/** The data name the credentials description is written under. */
+export const CREDENTIALS_NAME = "credentials";
 
 /** Replacement for a secret in anything this module logs, stores or throws. */
 const REDACTED = "[redacted]";
@@ -36,41 +72,30 @@ const PROJECT_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const CHANNEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
 const GlobalArgsSchema = z.object({
-  target: z
-    .string()
+  target: z.string()
     .regex(PROJECT_PATTERN, "a target is user/game, as butler push names it")
-    .meta({
-      description:
-        "The itch.io project as user/game, the part of a butler target before the channel",
-    }),
-  butler: z.string().min(1).default("butler").meta({
-    description: "Path to butler, or its command name when it is on PATH",
-  }),
-  apiKey: z
-    .string()
-    .min(1)
-    .meta({ sensitive: true })
+    .optional()
     .describe(
-      "itch.io API key, passed to butler as BUTLER_API_KEY. Omit when butler on this machine is logged in",
-    )
-    .optional(),
-  identity: z
-    .string()
-    .min(1)
-    .meta({
-      description:
-        "Credentials file butler reads instead of its default one (butler -i), for a second account",
-    })
-    .optional(),
+      "The itch.io project as user/game, the part of a butler target before the channel. push and status need it, and latest without a gameId",
+    ),
+  butler: z.string().min(1).default("butler").describe(
+    "Path to butler, or its command name when it is on PATH",
+  ),
+  apiKey: z.string().min(1).optional().meta({ sensitive: true }).describe(
+    "itch.io API key, supplied with a vault.get expression, never a literal. butler gets it as BUTLER_API_KEY; games and credentials need it and send it only as a Bearer header. butler needs none when it is logged in",
+  ),
+  identity: z.string().min(1).optional().describe(
+    "Credentials file butler reads instead of its default one (butler -i), for a second account",
+  ),
 });
 
 /** Global arguments of a behavior instance, as validated by swamp. */
 export interface GlobalArgs {
-  /** The itch.io project as `user/game`. */
-  target: string;
+  /** The itch.io project as `user/game`; push, status and latest by target need it. */
+  target?: string;
   /** Path to butler, or its command name when it is on PATH. */
   butler: string;
-  /** itch.io API key passed as BUTLER_API_KEY, absent when butler is logged in. */
+  /** itch.io API key. Sensitive: supply it with a vault expression. */
   apiKey?: string;
   /** Credentials file passed as butler -i. */
   identity?: string;
@@ -82,56 +107,38 @@ const _GlobalArgsMatch: Same<
 > = true;
 
 const PushArgsSchema = z.object({
-  directory: z.string().min(1).meta({
-    description:
-      "Build directory or .zip to upload, relative to the repository root or absolute",
-  }),
-  channel: z
-    .string()
+  directory: z.string().min(1).describe(
+    "Build directory or .zip to upload, relative to the repository root or absolute",
+  ),
+  channel: z.string()
     .regex(CHANNEL_PATTERN, "a channel name has no colon, slash or space")
-    .meta({
-      description:
-        "Channel to push to, such as windows-beta or linux-stable; itch.io tags the platform from its name",
-    }),
-  userVersion: z
-    .string()
-    .meta({
-      description:
-        "Your own version number for this build (butler --userversion). Empty records none",
-    })
-    .optional(),
-  userVersionFile: z
-    .string()
-    .min(1)
-    .meta({
-      description:
-        "File holding the version number, relative to the repository root or absolute (butler --userversion-file)",
-    })
-    .optional(),
-  ifChanged: z.boolean().default(false).meta({
-    description:
-      "Push nothing when the contents equal the channel's latest build (butler --if-changed)",
-  }),
-  dryRun: z.boolean().default(false).meta({
-    description:
-      "List what would be pushed and upload nothing (butler --dry-run)",
-  }),
-  hidden: z.boolean().default(false).meta({
-    description:
-      "Mark a new channel's upload hidden. butler refuses it on an existing channel (butler --hidden)",
-  }),
-  fixPermissions: z.boolean().default(false).meta({
-    description:
-      "Mark Mac and Linux executables executable before pushing (butler --fix-permissions)",
-  }),
-  ignore: z.array(z.string().min(1)).default([]).meta({
-    description:
-      "Glob patterns of files to leave out, each passed as butler --ignore",
-  }),
-  timeoutSeconds: z.number().int().positive().default(3600).meta({
-    description:
-      "Kill butler and fail when it has not exited after this many seconds",
-  }),
+    .describe(
+      "Channel to push to, such as windows-beta or linux-stable; itch.io tags the platform from its name",
+    ),
+  userVersion: z.string().optional().describe(
+    "Your own version number for this build (butler --userversion). Empty records none",
+  ),
+  userVersionFile: z.string().min(1).optional().describe(
+    "File holding the version number, relative to the repository root or absolute (butler --userversion-file)",
+  ),
+  ifChanged: z.boolean().default(false).describe(
+    "Push nothing when the contents equal the channel's latest build (butler --if-changed)",
+  ),
+  dryRun: z.boolean().default(false).describe(
+    "List what would be pushed and upload nothing (butler --dry-run)",
+  ),
+  hidden: z.boolean().default(false).describe(
+    "Mark a new channel's upload hidden. butler refuses it on an existing channel (butler --hidden)",
+  ),
+  fixPermissions: z.boolean().default(false).describe(
+    "Mark Mac and Linux executables executable before pushing (butler --fix-permissions)",
+  ),
+  ignore: z.array(z.string().min(1)).default([]).describe(
+    "Glob patterns of files to leave out, each passed as butler --ignore",
+  ),
+  timeoutSeconds: z.number().int().positive().default(3600).describe(
+    "Kill butler and fail when it has not exited after this many seconds",
+  ),
 });
 
 /** Arguments of `push`. */
@@ -161,25 +168,21 @@ export interface PushArgs {
 const _PushArgsMatch: Same<z.infer<typeof PushArgsSchema>, PushArgs> = true;
 
 const StatusArgsSchema = z.object({
-  channel: z
-    .string()
+  channel: z.string()
     .regex(CHANNEL_PATTERN, "a channel name has no colon, slash or space")
-    .meta({
-      description:
-        "Read only this channel. Unset reads every channel of the project",
-    })
-    .optional(),
-  waitSeconds: z.number().int().min(0).max(86400).default(0).meta({
-    description:
-      "Read again until the channel's build is ready or failed, for at most this many seconds. 0 reads once",
-  }),
-  intervalSeconds: z.number().int().min(5).max(600).default(15).meta({
-    description: "Seconds between reads while waiting",
-  }),
-  timeoutSeconds: z.number().int().positive().default(120).meta({
-    description:
-      "Kill one butler status call and fail when it has not exited after this many seconds",
-  }),
+    .optional()
+    .describe(
+      "Read only this channel. Unset reads every channel of the project",
+    ),
+  waitSeconds: z.number().int().min(0).max(86400).default(0).describe(
+    "Read again until the channel's build is ready or failed, for at most this many seconds. 0 reads once",
+  ),
+  intervalSeconds: z.number().int().min(5).max(600).default(15).describe(
+    "Seconds between reads while waiting",
+  ),
+  timeoutSeconds: z.number().int().positive().default(120).describe(
+    "Kill one butler status call and fail when it has not exited after this many seconds",
+  ),
 });
 
 /** Arguments of `status`. */
@@ -200,22 +203,33 @@ const _StatusArgsMatch: Same<
 > = true;
 
 const LatestArgsSchema = z.object({
-  channel: z
-    .string()
+  channel: z.string()
     .regex(CHANNEL_PATTERN, "a channel name has no colon, slash or space")
-    .meta({ description: "Channel whose latest user version to read" }),
+    .describe(
+      "Channel whose latest user version to read, as named in butler push, such as windows-beta",
+    ),
+  gameId: z.number().int().positive().optional().describe(
+    "itch.io game id, shown on the game's Edit game page. Set, the channel is recorded by game id with whether it moved; unset, the target's channel is read",
+  ),
 });
 
 /** Arguments of `latest`. */
 export interface LatestArgs {
   /** Channel whose latest user version to read. */
   channel: string;
+  /** itch.io game id; absent reads the `target` project's channel. */
+  gameId?: number;
 }
 
 const _LatestArgsMatch: Same<
   z.infer<typeof LatestArgsSchema>,
   LatestArgs
 > = true;
+
+const NoArgsSchema = z.object({});
+
+/** An ISO-8601 time this behavior stamps on a record. */
+const IsoTime = z.string().pipe(z.iso.datetime());
 
 const BuildSchema = z.object({
   id: z.number().int(),
@@ -239,9 +253,9 @@ export interface Build {
   userVersion?: string;
   /** The build this one was patched from. */
   parentBuildId?: number;
-  /** When itch.io created the build. */
+  /** When itch.io created the build, as butler printed it. */
   createdAt?: string;
-  /** When itch.io last changed the build. */
+  /** When itch.io last changed the build, as butler printed it. */
   updatedAt?: string;
 }
 
@@ -286,8 +300,8 @@ const PushResourceSchema = z.object({
   skipped: z.boolean(),
   reason: z.string(),
   userVersion: z.string().optional(),
-  startedAt: z.string(),
-  finishedAt: z.string(),
+  startedAt: IsoTime,
+  finishedAt: IsoTime,
   exitCode: z.number().int(),
   logLines: z.number().int(),
   logExcerpt: z.array(z.string()),
@@ -296,7 +310,7 @@ const PushResourceSchema = z.object({
 const StatusResourceSchema = z.object({
   target: z.string(),
   channel: z.string().optional(),
-  fetchedAt: z.string(),
+  fetchedAt: IsoTime,
   reads: z.number().int(),
   waitedSeconds: z.number().int(),
   timedOut: z.boolean(),
@@ -310,7 +324,7 @@ const StatusResourceSchema = z.object({
 const LatestResourceSchema = z.object({
   target: z.string(),
   channel: z.string(),
-  fetchedAt: z.string(),
+  fetchedAt: IsoTime,
   latest: z.string().optional(),
 });
 
@@ -319,6 +333,262 @@ const VersionResourceSchema = z.object({
   commit: z.string().optional(),
   builtAt: z.string().optional(),
   versionString: z.string(),
+});
+
+const EarningSchema = z.object({
+  currency: z.string(),
+  amount: z.number(),
+});
+
+/** A game's earnings in one currency, in the currency's smallest unit. */
+export interface Earning {
+  /** ISO currency code, e.g. USD. */
+  currency: string;
+  /** Amount in the smallest unit of the currency, e.g. cents. */
+  amount: number;
+}
+
+const _EarningMatch: Same<z.infer<typeof EarningSchema>, Earning> = true;
+
+const GameSchema = z.object({
+  id: z.number().int().positive(),
+  title: z.string(),
+  published: z.boolean().nullable(),
+  publishedAt: z.string().nullable(),
+  minPrice: z.number().nullable(),
+  viewsCount: z.number().nullable(),
+  downloadsCount: z.number().nullable(),
+  purchasesCount: z.number().nullable(),
+  earnings: z.array(EarningSchema),
+});
+
+/**
+ * One game as recorded: its id, title, publish state and the totals itch.io
+ * reports to its owner. A field the API left out is null. The page address,
+ * which names the owner's account, and fields nothing compares are not kept.
+ */
+export interface Game {
+  /** itch.io game id. */
+  id: number;
+  /** Game title. */
+  title: string;
+  /** Whether the page is published. */
+  published: boolean | null;
+  /** Time the page was published, as itch.io sent it. */
+  publishedAt: string | null;
+  /** Minimum price in cents. */
+  minPrice: number | null;
+  /** Page views. */
+  viewsCount: number | null;
+  /** Downloads. */
+  downloadsCount: number | null;
+  /** Purchases. */
+  purchasesCount: number | null;
+  /** Earnings per currency, sorted by currency. */
+  earnings: Earning[];
+}
+
+const _GameMatch: Same<z.infer<typeof GameSchema>, Game> = true;
+
+const FieldValueSchema = z.union([z.string(), z.number(), z.boolean()])
+  .nullable();
+
+/** A recorded field value. */
+export type FieldValue = string | number | boolean | null;
+
+const FieldChangeSchema = z.object({
+  field: z.string(),
+  from: FieldValueSchema,
+  to: FieldValueSchema,
+  delta: z.number().nullable(),
+});
+
+/** One field of one game that differs from the previous version. */
+export interface FieldChange {
+  /** Field name, or `earnings.<currency>` for an earnings amount. */
+  field: string;
+  /** The previous value. */
+  from: FieldValue;
+  /** The current value. */
+  to: FieldValue;
+  /** `to - from` when both are numbers, otherwise null. */
+  delta: number | null;
+}
+
+const _FieldChangeMatch: Same<z.infer<typeof FieldChangeSchema>, FieldChange> =
+  true;
+
+const GameRefSchema = z.object({
+  id: z.number().int().positive(),
+  title: z.string(),
+});
+
+/** A game named by id and title. */
+export interface GameRef {
+  /** itch.io game id. */
+  id: number;
+  /** Game title. */
+  title: string;
+}
+
+const _GameRefMatch: Same<z.infer<typeof GameRefSchema>, GameRef> = true;
+
+const GameChangeSchema = z.object({
+  id: z.number().int().positive(),
+  title: z.string(),
+  fields: z.array(FieldChangeSchema),
+});
+
+/** The fields of one game that changed. */
+export interface GameChange extends GameRef {
+  /** Each changed field, in a fixed order. */
+  fields: FieldChange[];
+}
+
+const _GameChangeMatch: Same<z.infer<typeof GameChangeSchema>, GameChange> =
+  true;
+
+const ChangesSchema = z.object({
+  since: IsoTime,
+  added: z.array(GameRefSchema),
+  removed: z.array(GameRefSchema),
+  changed: z.array(GameChangeSchema),
+});
+
+/** What differs from the previous recorded version. */
+export interface Changes {
+  /** When the previous version was read. */
+  since: string;
+  /** Games present now and not before. */
+  added: GameRef[];
+  /** Games present before and not now. */
+  removed: GameRef[];
+  /** Games present in both whose fields differ. */
+  changed: GameChange[];
+}
+
+const _ChangesMatch: Same<z.infer<typeof ChangesSchema>, Changes> = true;
+
+const GamesRecordSchema = z.object({
+  fetchedAt: IsoTime,
+  games: z.array(GameSchema),
+  changes: ChangesSchema.nullable(),
+});
+
+/** One version of the `games` resource. */
+export interface GamesRecord {
+  /** ISO-8601 time the games were read. */
+  fetchedAt: string;
+  /** Every game, sorted by id. */
+  games: Game[];
+  /** Differences from the previous version, or null for the first one. */
+  changes: Changes | null;
+}
+
+const _GamesRecordMatch: Same<z.infer<typeof GamesRecordSchema>, GamesRecord> =
+  true;
+
+const PreviousLatestSchema = z.object({
+  latest: z.string().nullable(),
+  checkedAt: IsoTime,
+});
+
+/** A channel's previously recorded user version. */
+export interface PreviousLatest {
+  /** The user version, or null when the build had none. */
+  latest: string | null;
+  /** When it was read. */
+  checkedAt: string;
+}
+
+const _PreviousLatestMatch: Same<
+  z.infer<typeof PreviousLatestSchema>,
+  PreviousLatest
+> = true;
+
+const ChannelRecordSchema = z.object({
+  gameId: z.number().int().positive(),
+  channel: z.string(),
+  latest: z.string().nullable(),
+  checkedAt: IsoTime,
+  previous: PreviousLatestSchema.nullable(),
+  changed: z.boolean(),
+});
+
+/** One version of a channel's `channel` resource. */
+export interface ChannelRecord {
+  /** itch.io game id. */
+  gameId: number;
+  /** butler channel name. */
+  channel: string;
+  /** Latest user version, or null when the latest build has none. */
+  latest: string | null;
+  /** ISO-8601 time it was read. */
+  checkedAt: string;
+  /** The previous recorded version, or null for the first. */
+  previous: PreviousLatest | null;
+  /** Whether `latest` differs from the previous version's; false for the first. */
+  changed: boolean;
+}
+
+const _ChannelRecordMatch: Same<
+  z.infer<typeof ChannelRecordSchema>,
+  ChannelRecord
+> = true;
+
+const CredentialsRecordSchema = z.object({
+  type: z.string(),
+  scopes: z.array(z.string()).nullable(),
+  expiresAt: z.string().nullable(),
+  checkedAt: IsoTime,
+});
+
+/** What itch.io says about the key, never the key itself. */
+export interface CredentialsRecord {
+  /** `key` for an API key, `jwt` for a JWT token. */
+  type: string;
+  /** Scopes the key is limited to, or null for an unscoped key. */
+  scopes: string[] | null;
+  /** Expiry of a JWT token, or null. */
+  expiresAt: string | null;
+  /** ISO-8601 time it was read. */
+  checkedAt: string;
+}
+
+const _CredentialsRecordMatch: Same<
+  z.infer<typeof CredentialsRecordSchema>,
+  CredentialsRecord
+> = true;
+
+/**
+ * The fields of one game in `/profile/games` this behavior reads; the rest,
+ * such as the page address, cover and the owner's user object, are dropped
+ * when the answer is parsed.
+ */
+const ApiGameSchema = z.object({
+  id: z.number().int().positive(),
+  title: z.string(),
+  published: z.boolean().nullish(),
+  published_at: z.string().nullish(),
+  min_price: z.number().nullish(),
+  views_count: z.number().nullish(),
+  downloads_count: z.number().nullish(),
+  purchases_count: z.number().nullish(),
+  earnings: z.array(
+    z.object({ currency: z.string(), amount: z.number() }),
+  ).nullish(),
+});
+
+const ApiGamesSchema = z.object({ games: z.array(ApiGameSchema) });
+
+const ApiCredentialsSchema = z.object({
+  type: z.string(),
+  scopes: z.array(z.string()).nullish(),
+  expires_at: z.string().nullish(),
+});
+
+const ApiLatestSchema = z.object({
+  latest: z.union([z.string(), z.number()]).nullish(),
 });
 
 /** What the injected runner is asked to run. */
@@ -350,7 +620,7 @@ export interface RunResult {
 /** Runs a program with closed standard input. Tests replace it, swamp uses `denoRunner`. */
 export type Runner = (request: RunRequest) => Promise<RunResult>;
 
-/** The subset of `fetch` the `latest` method uses. Tests replace it. */
+/** The subset of `fetch` the methods use. Tests replace it. */
 export type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 
 /** Runs a program with `Deno.Command`, standard input closed, killed on timeout or abort. */
@@ -607,6 +877,11 @@ export interface MethodContext {
     name: string,
     data: Record<string, unknown>,
   ) => Promise<DataHandle>;
+  /** Reads the latest version of one of this instance's records, or null. */
+  readResource?: (
+    instanceName: string,
+    version?: number,
+  ) => Promise<Record<string, unknown> | null>;
 }
 
 /** Injectable dependencies, set by tests and otherwise defaulted to the Deno runtime. */
@@ -648,6 +923,26 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
     }, ms);
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/** The `target` global argument, or an error naming the method that needs it. */
+function requireTarget(globalArgs: GlobalArgs, method: string): string {
+  if (globalArgs.target === undefined) {
+    throw new Error(
+      `${method} needs the target global argument, the itch.io project as user/game`,
+    );
+  }
+  return globalArgs.target;
+}
+
+/** The `apiKey` global argument, or an error naming the method that needs it. */
+function requireKey(globalArgs: GlobalArgs, method: string): string {
+  if (globalArgs.apiKey === undefined) {
+    throw new Error(
+      `${method} needs the apiKey global argument: an itch.io API key, supplied with a vault.get expression`,
+    );
+  }
+  return globalArgs.apiKey;
 }
 
 /** The global flags and environment every butler call shares. */
@@ -726,17 +1021,15 @@ function failure(
 async function readStatus(
   runner: Runner,
   globalArgs: GlobalArgs,
+  target: string,
   channel: string | undefined,
   timeoutSeconds: number,
   signal?: AbortSignal,
 ): Promise<Channel[]> {
-  const target = channel === undefined
-    ? globalArgs.target
-    : `${globalArgs.target}:${channel}`;
   const run = await runButler(
     runner,
     globalArgs,
-    ["status", target],
+    ["status", channel === undefined ? target : `${target}:${channel}`],
     timeoutSeconds * 1000,
     signal,
   );
@@ -750,10 +1043,331 @@ async function readStatus(
   return parseStatusResult(output.result);
 }
 
-/** The itch.io publishing behavior. */
+/** What a status code means when itch.io's answer carries no message of its own. */
+const STATUS_HINTS: Record<number, string> = {
+  401: "the API key is missing, invalid or revoked",
+  403: "the API key lacks the scope this endpoint needs",
+  404: "not found",
+};
+
+/**
+ * Sends one GET request and returns the parsed JSON body. The key, when
+ * given, goes only in the `Authorization` header, and a redirect is then
+ * refused rather than followed with it. Throws a specific error for
+ * a network failure, a rate limit, a server error, an `errors` array, another
+ * failing status, or a body that is not JSON. No message contains the key.
+ */
+export async function getJson(
+  fetcher: Fetcher,
+  url: string,
+  where: string,
+  apiKey: string | null,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (apiKey !== null) {
+    headers.authorization = `Bearer ${apiKey}`;
+  }
+  let response: Response;
+  try {
+    response = await fetcher(url, {
+      method: "GET",
+      headers,
+      // A redirect would carry the key header to whatever host it names.
+      redirect: apiKey === null ? "follow" : "error",
+      signal: combined,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`${where}: request failed: ${detail}`);
+  }
+  if (response.status === 429) {
+    await response.body?.cancel();
+    const retryAfter = response.headers.get("retry-after");
+    throw new Error(
+      `${where}: itch.io rate limited the request (HTTP 429)` +
+        (retryAfter ? `, retry after ${retryAfter} seconds` : ", retry later"),
+    );
+  }
+  const text = await response.text();
+  if (response.status >= 500) {
+    throw new Error(
+      `${where}: itch.io is unavailable (HTTP ${response.status}), a transient failure, retry later: ${
+        text.slice(0, 200)
+      }`,
+    );
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw new Error(
+      `${where}: HTTP ${response.status}, body is not JSON: ${
+        text.slice(0, 200)
+      }`,
+    );
+  }
+  const errors = body !== null && typeof body === "object"
+    ? (body as Record<string, unknown>).errors
+    : undefined;
+  if (Array.isArray(errors) && errors.length > 0) {
+    const hint = STATUS_HINTS[response.status];
+    throw new Error(
+      `${where}: itch.io refused the request (HTTP ${response.status}): ${
+        errors.map(String).join("; ")
+      }` + (hint ? ` (${hint})` : ""),
+    );
+  }
+  if (!response.ok) {
+    const hint = STATUS_HINTS[response.status] ?? "unexpected status";
+    throw new Error(
+      `${where}: HTTP ${response.status}, ${hint}: ${text.slice(0, 200)}`,
+    );
+  }
+  return body;
+}
+
+/** Converts one documented API game to the recorded shape. */
+function toGame(api: z.infer<typeof ApiGameSchema>): Game {
+  const earnings = (api.earnings ?? [])
+    .map((earning) => ({ currency: earning.currency, amount: earning.amount }))
+    .sort((a, b) => a.currency.localeCompare(b.currency));
+  return {
+    id: api.id,
+    title: api.title,
+    published: api.published ?? null,
+    publishedAt: api.published_at ?? null,
+    minPrice: api.min_price ?? null,
+    viewsCount: api.views_count ?? null,
+    downloadsCount: api.downloads_count ?? null,
+    purchasesCount: api.purchases_count ?? null,
+    earnings,
+  };
+}
+
+/** Reads the key owner's games from `/profile/games`, sorted by id. */
+export async function fetchGames(
+  fetcher: Fetcher,
+  apiKey: string,
+  signal?: AbortSignal,
+): Promise<Game[]> {
+  const where = "GET /profile/games";
+  const body = await getJson(fetcher, GAMES_URL, where, apiKey, signal);
+  const parsed = ApiGamesSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new Error(
+      `${where}: the answer is not the documented shape: ${
+        parsed.error.issues.map((issue) =>
+          `${issue.path.join(".")}: ${issue.message}`
+        ).join("; ").slice(0, 300)
+      }`,
+    );
+  }
+  return parsed.data.games.map(toGame).sort((a, b) => a.id - b.id);
+}
+
+/** Reads `/wharf/latest` for one query, without a key. */
+async function readLatest(
+  fetcher: Fetcher,
+  query: Record<string, string>,
+  where: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const url = new URL(WHARF_LATEST_URL);
+  for (const [name, value] of Object.entries(query)) {
+    url.searchParams.set(name, value);
+  }
+  const body = await getJson(fetcher, url.toString(), where, null, signal);
+  const parsed = ApiLatestSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new Error(`${where}: the answer is not the documented shape`);
+  }
+  const latest = parsed.data.latest;
+  return latest === null || latest === undefined ? null : String(latest);
+}
+
+/** Reads a channel's latest user version by game id from `/wharf/latest`, without a key. */
+export function fetchLatest(
+  fetcher: Fetcher,
+  gameId: number,
+  channel: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  return readLatest(
+    fetcher,
+    { game_id: String(gameId), channel_name: channel },
+    `GET /wharf/latest for game ${gameId} channel ${channel}`,
+    signal,
+  );
+}
+
+/** Reads a channel's latest user version by `user/game` target from `/wharf/latest`, without a key. */
+export function fetchTargetLatest(
+  fetcher: Fetcher,
+  target: string,
+  channel: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  return readLatest(
+    fetcher,
+    { target, channel_name: channel },
+    `GET /wharf/latest for ${target}:${channel} (a private game answers "invalid game")`,
+    signal,
+  );
+}
+
+/** The key's description from `/credentials/info`, without a reading time. */
+export type KeyInfo = Omit<CredentialsRecord, "checkedAt">;
+
+/** Reads the key's type and scopes from `/credentials/info`. */
+export async function fetchCredentials(
+  fetcher: Fetcher,
+  apiKey: string,
+  signal?: AbortSignal,
+): Promise<KeyInfo> {
+  const where = "GET /credentials/info";
+  const body = await getJson(fetcher, CREDENTIALS_URL, where, apiKey, signal);
+  const parsed = ApiCredentialsSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new Error(`${where}: the answer is not the documented shape`);
+  }
+  return {
+    type: parsed.data.type,
+    scopes: parsed.data.scopes ?? null,
+    expiresAt: parsed.data.expires_at ?? null,
+  };
+}
+
+/** The scalar game fields compared between versions, in reporting order. */
+const COMPARED_FIELDS = [
+  "title",
+  "published",
+  "publishedAt",
+  "minPrice",
+  "viewsCount",
+  "downloadsCount",
+  "purchasesCount",
+] as const;
+
+/** One field change, with a delta when both sides are numbers. */
+function fieldChange(
+  field: string,
+  from: FieldValue,
+  to: FieldValue,
+): FieldChange {
+  const delta = typeof from === "number" && typeof to === "number"
+    ? to - from
+    : null;
+  return { field, from, to, delta };
+}
+
+/** The fields of one game that differ between two versions. */
+export function diffGame(before: Game, after: Game): FieldChange[] {
+  const changes: FieldChange[] = [];
+  for (const field of COMPARED_FIELDS) {
+    if (before[field] !== after[field]) {
+      changes.push(fieldChange(field, before[field], after[field]));
+    }
+  }
+  const earned = (game: Game) =>
+    new Map(game.earnings.map((earning) => [earning.currency, earning.amount]));
+  const was = earned(before);
+  const now = earned(after);
+  const currencies = [...new Set([...was.keys(), ...now.keys()])].sort();
+  for (const currency of currencies) {
+    const from = was.get(currency) ?? null;
+    const to = now.get(currency) ?? null;
+    if (from !== to) {
+      changes.push(fieldChange(`earnings.${currency}`, from, to));
+    }
+  }
+  return changes;
+}
+
+/** What differs between the previous recorded games and the current ones. */
+export function diffGames(
+  previous: GamesRecord,
+  current: readonly Game[],
+): Changes {
+  const before = new Map(previous.games.map((game) => [game.id, game]));
+  const after = new Map(current.map((game) => [game.id, game]));
+  const ref = (game: Game): GameRef => ({ id: game.id, title: game.title });
+  const added: GameRef[] = [];
+  const changed: GameChange[] = [];
+  for (const game of current) {
+    const old = before.get(game.id);
+    if (old === undefined) {
+      added.push(ref(game));
+      continue;
+    }
+    const fields = diffGame(old, game);
+    if (fields.length > 0) {
+      changed.push({ ...ref(game), fields });
+    }
+  }
+  const removed = previous.games
+    .filter((game) => !after.has(game.id))
+    .map(ref)
+    .sort((a, b) => a.id - b.id);
+  return { since: previous.fetchedAt, added, removed, changed };
+}
+
+/** The data name a channel's latest user version is written under. */
+export function channelName(gameId: number, channel: string): string {
+  return `game-${gameId}-${channel}`;
+}
+
+/**
+ * Reads this instance's previous record, or null when there is none or it no
+ * longer parses. Fields a record holds that the schema no longer declares,
+ * such as a game's page address in versions before 2026.10.31.1, are dropped.
+ */
+async function readPrevious<T>(
+  context: MethodContext,
+  name: string,
+  schema: z.ZodType<T>,
+): Promise<T | null> {
+  if (context.readResource === undefined) {
+    throw new Error(
+      "this method needs swamp's readResource to compare with the previous version; upgrade swamp",
+    );
+  }
+  const stored = await context.readResource(name);
+  if (stored === null) {
+    return null;
+  }
+  const parsed = schema.safeParse(stored);
+  if (!parsed.success) {
+    context.logger.warning(
+      "The previous {name} record is not in the current shape; recording without a comparison",
+      { name },
+    );
+    return null;
+  }
+  return parsed.data;
+}
+
+/**
+ * The upgrade to 2026.10.31.1. Both lines that held this name keep their
+ * global arguments as written: a butler instance (2026.10.21.1: target, butler,
+ * apiKey, identity) and an API instance (2026.10.22.x: apiKey alone) are each
+ * a valid set of 2026.10.31.1's arguments. Pure: the same arguments give the
+ * same result.
+ */
+export function upgradeArguments(
+  old: Record<string, unknown>,
+): Record<string, unknown> {
+  return { ...old };
+}
+
+/** The itch.io behavior: butler publishing and the server-side API's records. */
 export const behavior = {
+  // String literals, not constants: the registry catalog reads them from the
+  // source.
   type: "@reset/itch",
-  version: "2026.10.21.1",
+  version: "2026.10.31.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     push: {
@@ -772,7 +1386,7 @@ export const behavior = {
     },
     latest: {
       description:
-        "A channel's latest user version from itch.io's public update check endpoint",
+        "A target channel's latest user version from itch.io's public update check endpoint",
       schema: LatestResourceSchema,
       lifetime: "30d",
       garbageCollection: 20,
@@ -782,6 +1396,26 @@ export const behavior = {
       schema: VersionResourceSchema,
       lifetime: "30d",
       garbageCollection: 5,
+    },
+    games: {
+      description:
+        "Every game the API key's owner can edit, its publish state, price and counts, with what changed since the previous version",
+      schema: GamesRecordSchema,
+      lifetime: "infinite",
+      garbageCollection: "365d",
+    },
+    channel: {
+      description:
+        "One game's channel's latest user version by game id, and whether it moved since the previous version",
+      schema: ChannelRecordSchema,
+      lifetime: "infinite",
+      garbageCollection: "365d",
+    },
+    credentials: {
+      description: "The API key's type and scopes, never the key itself",
+      schema: CredentialsRecordSchema,
+      lifetime: "infinite",
+      garbageCollection: 10,
     },
   },
   methods: {
@@ -794,6 +1428,7 @@ export const behavior = {
         context: MethodContext,
       ): Promise<MethodResult> => {
         const { globalArgs, logger } = context;
+        const project = requireTarget(globalArgs, "push");
         const runner = args._runner ?? denoRunner;
         const directory = resolveFrom(context.repoDir, args.directory);
         const flags: string[] = [];
@@ -816,7 +1451,7 @@ export const behavior = {
         for (const pattern of args.ignore) {
           flags.push("--ignore", pattern);
         }
-        const target = `${globalArgs.target}:${args.channel}`;
+        const target = `${project}:${args.channel}`;
         logger.info("Pushing {directory} to {target}", {
           directory,
           target,
@@ -865,7 +1500,7 @@ export const behavior = {
         );
         const lines = excerpt(output);
         const data: z.infer<typeof PushResourceSchema> = {
-          target: globalArgs.target,
+          target: project,
           channel: stringField(output.result, "channel") ?? args.channel,
           directory,
           buildId,
@@ -894,6 +1529,7 @@ export const behavior = {
         context: MethodContext,
       ): Promise<MethodResult> => {
         const { globalArgs, logger } = context;
+        const target = requireTarget(globalArgs, "status");
         const runner = args._runner ?? denoRunner;
         const sleep = args._sleep ?? defaultSleep;
         const now = args._now ?? Date.now;
@@ -903,7 +1539,7 @@ export const behavior = {
         let channels: Channel[];
         let timedOut = false;
         logger.info("Reading the channels of {target}{named}", {
-          target: globalArgs.target,
+          target,
           named: args.channel === undefined ? "" : `:${args.channel}`,
           waitSeconds: args.waitSeconds,
         });
@@ -914,6 +1550,7 @@ export const behavior = {
             channels = await readStatus(
               runner,
               globalArgs,
+              target,
               args.channel,
               args.timeoutSeconds,
               context.signal,
@@ -949,14 +1586,14 @@ export const behavior = {
             break;
           }
           logger.debug("{target} not settled after {reads} reads", {
-            target: globalArgs.target,
+            target,
             reads,
           });
           await sleep(args.intervalSeconds * 1000, context.signal);
         }
         const found = channels.length > 0;
         const data: z.infer<typeof StatusResourceSchema> = {
-          target: globalArgs.target,
+          target,
           fetchedAt: new Date(now()).toISOString(),
           reads,
           waitedSeconds: Math.round((now() - startedAt) / 1000),
@@ -974,7 +1611,7 @@ export const behavior = {
           logger.warning(
             "{target} has no channel{named}",
             {
-              target: globalArgs.target,
+              target,
               named: args.channel === undefined ? "" : ` named ${args.channel}`,
             },
           );
@@ -982,7 +1619,7 @@ export const behavior = {
           logger.info(
             "{target}: {count} channels, ready {ready}, failed {failed}",
             {
-              target: globalArgs.target,
+              target,
               count: channels.length,
               ready: data.ready,
               failed: data.failed,
@@ -995,7 +1632,7 @@ export const behavior = {
     },
     latest: {
       description:
-        "Read a channel's latest user version from itch.io's public update check endpoint, which needs no credentials",
+        "Read a channel's latest user version from itch.io's public update check, without the key. With gameId, writes channel and whether it moved; without, writes latest for the target",
       arguments: LatestArgsSchema,
       execute: async (
         args: LatestArgs & Injected,
@@ -1003,59 +1640,77 @@ export const behavior = {
       ): Promise<MethodResult> => {
         const { globalArgs, logger } = context;
         const fetcher = args._fetch ?? globalThis.fetch;
-        const url = `${WHARF_LATEST}?target=${
-          encodeURIComponent(globalArgs.target)
-        }&channel_name=${encodeURIComponent(args.channel)}`;
-        logger.info("Reading the latest user version of {target}:{channel}", {
-          target: globalArgs.target,
-          channel: args.channel,
-        });
-        const response = await fetcher(url, { signal: context.signal });
-        const text = await response.text();
-        let body: unknown;
-        try {
-          body = JSON.parse(text);
-        } catch {
-          body = undefined;
-        }
-        const value = typeof body === "object" && body !== null
-          ? body as Record<string, unknown>
-          : {};
-        const errors = Array.isArray(value.errors)
-          ? value.errors.map(String)
-          : [];
-        if (!response.ok || errors.length > 0) {
-          throw new Error(
-            `itch.io update check for ${globalArgs.target}:${args.channel} failed with HTTP ${response.status}${
-              errors.length > 0 ? `: ${errors.join("; ")}` : ""
-            }. ${
-              response.status === 429 || response.status >= 500
-                ? "itch.io is limiting or unavailable: retry later"
-                : 'A private game answers "invalid game"'
-            }`,
+        const now = args._now ?? Date.now;
+        if (args.gameId === undefined) {
+          const target = requireTarget(globalArgs, "latest without a gameId");
+          logger.info(
+            "Reading the latest user version of {target}:{channel}",
+            { target, channel: args.channel },
           );
+          const latest = await fetchTargetLatest(
+            fetcher,
+            target,
+            args.channel,
+            context.signal,
+          );
+          const data: z.infer<typeof LatestResourceSchema> = {
+            target,
+            channel: args.channel,
+            fetchedAt: new Date(now()).toISOString(),
+          };
+          if (latest !== null) {
+            data.latest = latest;
+          }
+          logger.info("{target}:{channel} latest user version {latest}", {
+            target,
+            channel: args.channel,
+            latest: latest ?? "(none)",
+          });
+          const handle = await context.writeResource("latest", "latest", data);
+          return { dataHandles: [handle] };
         }
-        const data: z.infer<typeof LatestResourceSchema> = {
-          target: globalArgs.target,
+        const gameId = args.gameId;
+        const name = channelName(gameId, args.channel);
+        const previous = await readPrevious(context, name, ChannelRecordSchema);
+        logger.info(
+          "Reading the latest version of game {gameId} channel {channel}",
+          { gameId, channel: args.channel },
+        );
+        const latest = await fetchLatest(
+          fetcher,
+          gameId,
+          args.channel,
+          context.signal,
+        );
+        const data: ChannelRecord = {
+          gameId,
           channel: args.channel,
-          fetchedAt: new Date().toISOString(),
+          latest,
+          checkedAt: new Date(now()).toISOString(),
+          previous: previous === null
+            ? null
+            : { latest: previous.latest, checkedAt: previous.checkedAt },
+          changed: previous !== null && previous.latest !== latest,
         };
-        const latest = value.latest;
-        if (typeof latest === "string" || typeof latest === "number") {
-          data.latest = String(latest);
-        }
-        logger.info("{target}:{channel} latest user version {latest}", {
-          target: globalArgs.target,
-          channel: args.channel,
-          latest: data.latest ?? "(none)",
+        const handle = await context.writeResource("channel", name, {
+          ...data,
         });
-        const handle = await context.writeResource("latest", "latest", data);
+        logger.info(
+          "Game {gameId} channel {channel} is at {latest}" +
+            (data.changed ? ", new since {since}" : ""),
+          {
+            gameId,
+            channel: args.channel,
+            latest: latest ?? "no user version",
+            since: data.previous?.checkedAt ?? "",
+          },
+        );
         return { dataHandles: [handle] };
       },
     },
     version: {
       description: "Record which butler this machine runs (butler version)",
-      arguments: z.object({}),
+      arguments: NoArgsSchema,
       execute: async (
         args: Injected,
         context: MethodContext,
@@ -1072,7 +1727,10 @@ export const behavior = {
           60_000,
           context.signal,
         );
-        const output = parseButlerOutput(run.stdout, run.stderr);
+        const output = parseButlerOutput(
+          redact(run.stdout, [globalArgs.apiKey]),
+          redact(run.stderr, [globalArgs.apiKey]),
+        );
         const version = output.result === undefined
           ? undefined
           : stringField(output.result, "version");
@@ -1093,5 +1751,94 @@ export const behavior = {
         return { dataHandles: [handle] };
       },
     },
+    games: {
+      description:
+        "Read the key owner's games from /profile/games and record them with the changes since the previous version",
+      arguments: NoArgsSchema,
+      execute: async (
+        args: Injected,
+        context: MethodContext,
+      ): Promise<MethodResult> => {
+        const { globalArgs, logger } = context;
+        const apiKey = requireKey(globalArgs, "games");
+        const fetcher = args._fetch ?? globalThis.fetch;
+        const now = args._now ?? Date.now;
+        const previous = await readPrevious(
+          context,
+          GAMES_NAME,
+          GamesRecordSchema,
+        );
+        logger.info("Reading the games of the API key's owner");
+        const games = await fetchGames(fetcher, apiKey, context.signal);
+        const data: GamesRecord = {
+          fetchedAt: new Date(now()).toISOString(),
+          games,
+          changes: previous === null ? null : diffGames(previous, games),
+        };
+        const handle = await context.writeResource(
+          "games",
+          GAMES_NAME,
+          { ...data },
+        );
+        if (data.changes === null) {
+          logger.info("Recorded {games} games, the first version", {
+            games: games.length,
+          });
+        } else {
+          logger.info(
+            "Recorded {games} games: {added} added, {removed} removed, {changed} changed since {since}",
+            {
+              games: games.length,
+              added: data.changes.added.length,
+              removed: data.changes.removed.length,
+              changed: data.changes.changed.length,
+              since: data.changes.since,
+            },
+          );
+        }
+        return { dataHandles: [handle] };
+      },
+    },
+    credentials: {
+      description:
+        "Read the API key's type and scopes from /credentials/info and record them, never the key",
+      arguments: NoArgsSchema,
+      execute: async (
+        args: Injected,
+        context: MethodContext,
+      ): Promise<MethodResult> => {
+        const { globalArgs, logger } = context;
+        const apiKey = requireKey(globalArgs, "credentials");
+        const fetcher = args._fetch ?? globalThis.fetch;
+        const now = args._now ?? Date.now;
+        logger.info("Reading the API key's type and scopes");
+        const info = await fetchCredentials(fetcher, apiKey, context.signal);
+        const data: CredentialsRecord = {
+          ...info,
+          checkedAt: new Date(now()).toISOString(),
+        };
+        const handle = await context.writeResource(
+          "credentials",
+          CREDENTIALS_NAME,
+          { ...data },
+        );
+        logger.info("The API key is a {type} with {scopes}", {
+          type: data.type,
+          scopes: data.scopes === null ? "every scope" : data.scopes.join(", "),
+        });
+        return { dataHandles: [handle] };
+      },
+    },
   },
+  upgrades: [
+    {
+      toVersion: "2026.10.31.1",
+      description:
+        "Joins the two lines of this extension: instances made on 2026.10.21.1 (butler: push, status, latest, version) and on 2026.10.22.x (API: games, latest by game id, credentials) keep their global arguments as written, and every method is available to both",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => upgradeArguments(old),
+    },
+  ],
 };
