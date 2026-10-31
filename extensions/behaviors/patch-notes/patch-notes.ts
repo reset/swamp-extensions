@@ -199,35 +199,29 @@ export class ForgeError extends Error {
 const NAME_PATTERN = /^[A-Za-z0-9_.-]+$/;
 
 const GlobalArgsSchema = z.object({
-  forge: z
-    .enum(["forgejo", "github"])
+  forge: z.enum(["forgejo", "github"])
     .default("github")
     .describe("forgejo (Forgejo or Gitea, /api/v1) or github."),
-  apiUrl: z
-    .url()
+  apiUrl: z.url()
     .optional()
     .describe(
       "API root. Defaults to https://api.github.com for github; required for forgejo, such as https://codeberg.org/api/v1.",
     ),
-  owner: z
-    .string()
+  owner: z.string()
     .regex(NAME_PATTERN)
     .describe("Repository owner, a user or an organization."),
   repo: z.string().regex(NAME_PATTERN).describe("Repository name."),
-  base: z
-    .string()
+  base: z.string()
     .min(1)
     .default("main")
     .describe("Branch the pull requests were merged into."),
   token: z.string().min(1).optional().meta({ sensitive: true }).describe(
     "Access token with read access to the repository; optional for a public one. Sent as a bearer token to GitHub and as `token` to Forgejo.",
   ),
-  labelPrefix: z
-    .string()
+  labelPrefix: z.string()
     .default("patch:")
     .describe("Label prefix that names a category: patch:fix is category fix."),
-  keepAuthors: z
-    .boolean()
+  keepAuthors: z.boolean()
     .default(false)
     .describe(
       "Keep each pull request's author login. Off by default, since a login is personal data.",
@@ -235,17 +229,14 @@ const GlobalArgsSchema = z.object({
 }) satisfies z.ZodType<GlobalArgs>;
 
 const GatherArgsSchema = z.object({
-  start: z
-    .string()
+  start: z.string()
     .min(1)
     .describe("Ref the notes start after, such as the previous release tag."),
-  end: z
-    .string()
+  end: z.string()
     .min(1)
     .optional()
     .describe("Ref the notes end at, inclusive. Defaults to the base branch."),
-  maxPages: z
-    .number()
+  maxPages: z.number()
     .int()
     .positive()
     .max(100)
@@ -257,25 +248,21 @@ const DraftArgsSchema = z.object({
   title: z.string().min(1).default("Patch notes").describe(
     "Heading of the notes.",
   ),
-  order: z
-    .array(z.string())
+  order: z.array(z.string())
     .default([])
     .describe(
       "Categories in the order they appear; any others follow alphabetically, uncategorized last.",
     ),
-  exclude: z
-    .array(z.string())
+  exclude: z.array(z.string())
     .default([])
     .describe("Categories left out of the notes, such as internal."),
-  numbers: z
-    .boolean()
+  numbers: z.boolean()
     .default(true)
     .describe("Whether each line ends with the pull request's number."),
 }) satisfies z.ZodType<DraftArgs>;
 
 const BbcodeArgsSchema = z.object({
-  markdown: z
-    .string()
+  markdown: z.string()
     .optional()
     .describe("Markdown to convert. Defaults to the latest draft's Markdown."),
 }) satisfies z.ZodType<BbcodeArgs>;
@@ -304,7 +291,7 @@ const DraftCategorySchema = z.object({
 }) satisfies z.ZodType<DraftCategory>;
 
 const GatherResourceSchema = z.object({
-  fetchedAt: z.iso.datetime(),
+  fetchedAt: z.string().pipe(z.iso.datetime()),
   forge: z.string(),
   repository: z.string(),
   base: z.string(),
@@ -319,7 +306,7 @@ const GatherResourceSchema = z.object({
 });
 
 const DraftResourceSchema = z.object({
-  createdAt: z.iso.datetime(),
+  createdAt: z.string().pipe(z.iso.datetime()),
   repository: z.string(),
   range: z.string(),
   title: z.string(),
@@ -331,11 +318,65 @@ const DraftResourceSchema = z.object({
 });
 
 const BbcodeResourceSchema = z.object({
-  createdAt: z.iso.datetime(),
+  createdAt: z.string().pipe(z.iso.datetime()),
   source: z.enum(["draft", "argument"]),
   length: z.number().int(),
   bbcode: z.string(),
 });
+
+// ---------------------------------------------------------------------------
+// Upgrades
+// ---------------------------------------------------------------------------
+
+/** Every global argument the drafter has taken since its first version. */
+const DRAFTER_ARGUMENTS = [
+  "forge",
+  "apiUrl",
+  "owner",
+  "repo",
+  "base",
+  "token",
+  "labelPrefix",
+  "keepAuthors",
+];
+
+/** The global arguments every drafter instance names. */
+const REQUIRED_ARGUMENTS = ["owner", "repo"];
+
+/**
+ * The upgrade to 2026.10.31.1. A drafter instance (2026.10.21.1) keeps its
+ * arguments as written. Swamp hands an upgrade the arguments and not the
+ * version they were written for, so arguments are judged by their names: any
+ * name the drafter never took, or a missing `owner` or `repo`, means they were
+ * written for something else, such as the Discord announcer that held this name
+ * at 2026.10.22.1, and the upgrade throws an error naming the change instead of
+ * dropping them. Pure: the same arguments give the same result.
+ */
+export function upgradeArguments(
+  old: Record<string, unknown>,
+): Record<string, unknown> {
+  const foreign = Object.keys(old)
+    .filter((name) => !DRAFTER_ARGUMENTS.includes(name))
+    .sort();
+  const missing = REQUIRED_ARGUMENTS.filter((name) => !(name in old));
+  if (foreign.length === 0 && missing.length === 0) {
+    return old;
+  }
+  const problems = [
+    ...(foreign.length > 0
+      ? [`arguments it does not take (${foreign.join(", ")})`]
+      : []),
+    ...(missing.length > 0 ? [`no ${missing.join(" or ")}`] : []),
+  ];
+  throw new Error(
+    `@reset/patch-notes 2026.10.31.1 drafts patch notes from merged pull ` +
+      `requests, and this instance has ${problems.join(" and ")}. ` +
+      `2026.10.22.1 was a Discord announcer published under this name by ` +
+      `mistake and is retired: announce a Steam game's patch notes with ` +
+      `@reset/steam-news and a Discord post, and give a patch-notes instance ` +
+      `owner and repo to draft notes.`,
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -679,8 +720,19 @@ export const behavior = {
   // String literals, not constants: the registry catalog reads them from the
   // source.
   type: "@reset/patch-notes",
-  version: "2026.10.21.1",
+  version: "2026.10.31.1",
   globalArguments: GlobalArgsSchema,
+  upgrades: [
+    {
+      toVersion: "2026.10.31.1",
+      description:
+        "Takes the name back from the Discord announcer published as 2026.10.22.1: drafter instances keep their arguments as written, and arguments the drafter never took fail with an error naming the change",
+      upgradeAttributes: (old: Record<string, unknown>): Record<
+        string,
+        unknown
+      > => upgradeArguments(old),
+    },
+  ],
   resources: {
     gather: {
       description: "The pull requests merged into the base branch between " +

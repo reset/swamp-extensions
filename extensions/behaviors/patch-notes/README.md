@@ -25,6 +25,26 @@ between the two refs, so a tag on a merge commit puts that pull request in the
 release the tag closes and not in the next one. Only a forge that reports no
 merge commit for a pull request falls back to its merge time.
 
+## The name
+
+`@reset/patch-notes` was briefly a different extension: 2026.10.22.1, published
+by mistake from another repository, announced a Steam game's new patch notes in
+Discord. That announcer is retired. Announcing is now done with
+`@reset/steam-news`, whose `fetch` method flags the posts its previous read did
+not hold, and a Discord post. 2026.10.31.1 is the drafter again.
+
+## Upgrading
+
+Upgrading to 2026.10.31.1 leaves a drafter instance (2026.10.21.1) as it is: its
+global arguments are kept exactly as written. An instance whose arguments were
+written for the announcer cannot be migrated, since the two share no arguments.
+Swamp hands an upgrade the arguments and not the version they came from, so the
+upgrade judges them by name: an argument the drafter never took, or a missing
+`owner` or `repo`, fails `swamp behavior validate` and any method run with an
+error that names the change, rather than being dropped. Recreate such an
+instance with `owner` and `repo` to draft notes, or move its announcing to
+`@reset/steam-news`.
+
 ## Install
 
 ```sh
