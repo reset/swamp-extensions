@@ -1,80 +1,38 @@
-# swamp-extensions
+# AGENTS.md — swamp-extensions
 
-The one repository where SMK's stack and Swamp Club meet. It depends on both: smk and the dev shell
-for the repository's own checks, swamp for the workspace, behaviors, workflows and extensions. Neither
-depends on it, and that is the rule this repository exists to keep: no smk verb, skill or smkproj.toml
-field references Swamp, and nothing published from here calls the smk binary, reads smkproj.toml or
-loads the smk plugin. Work item: SMK-247. Plan: wiki page 3715. Field notes: 3716. Feedback for the
-Swamp team: 3717.
+Guidance for coding agents changing this repository. README.md says what it does; this says how to
+change it.
 
-## Rules
+## What this is
 
-- This is the only repository that carries `.swamp.yaml`. Game, client and service repositories never
-  do, and `swamp` is not run inside them: every swamp command sends telemetry to
-  telemetry.swamp-club.com (command path, argument names such as the behavior name, exit code,
-  duration, platform, the AI tool it detected). What one entry holds is on wiki page 3716.
-- Swamp is initialized with `--tool none`. Its two skills live in `.claude/skills/` here, copied from
-  the vendor's install of swamp 20261020.024627.0, so nothing of Swamp's loads in a session outside
-  this repository. Refresh them by hand from a new release; never let `swamp repo init` write into
-  `~/.claude/skills`.
-- Published extensions talk to documented interfaces only: the Rollbar-compatible crash API (Rollbar
-  itself, or crashq with one host change), steamcmd, Steam's Web API, Unity batch mode, Wwise's WAAPI,
-  itch.io's butler, Forgejo's and GitHub's REST APIs.
-  Someone with Swamp and no SMK can use them on day one.
-- Publishing an extension, creating or renaming a collective, posting to the feed, joining the Discord
-  as reset and filing Lab issues or pull requests each need Jamie's explicit authorization. Friction
-  met while working here goes onto wiki page 3717, in the entry form that page describes.
-- This repository is public, with the full smk tooling and dev shell. Others read it and consume what it
-  publishes; they need not be able to build it. Nothing private goes in: no credentials, no personal
-  data, no company or client name (the repository speaks for a studio, not for one), instances
-  reference vault keys by name for a service's host as well as its credentials (`<service>-host`,
-  since a public domain still names the company and the private services behind it), and the
-  forge's address in the dev shell is the only internal hostname it carries.
-- The origin is <https://github.com/reset/swamp-extensions>; there is no copy on the forge. Pull requests
-  open with `smk pr create` and land through automerge's GitHub App (smk/automerge README "GitHub"),
-  which `.github/automerge.json` asks to serve this repository: `smk pr merge` posts the `=merge=`
-  comment that merges one once buildq's `buildq` status passes, `--after #N` holds one until #N has
-  merged, and an admin's `=rush=` comment merges one at once, untested. A pull request whose body
-  names an issue shows under that workq issue's Development.
-- Read Swamp's public manual and the vendor skills under `.claude/skills/`, not its AGPL source.
-- Nothing the studio relies on runs only here. Every workflow in `workflows/` is a flight of a
-  workload whose relied-on path is SMK's, named in `docs/workloads.md`; the flight runs beside it
-  and is measured, never substituted for it. Records worth keeping are exported to SMK's own
-  store, so this repository, its schedules and Swamp's data layer can be dropped without loss.
+The one repository where SMK's stack and Swamp Club meet: a Swamp workspace (`.swamp.yaml`,
+initialized `--tool none`), its workflows and behavior instances, and the extensions it publishes,
+TypeScript under Deno; shell for its own scripts. Scaffolded by smk proj from smkproj.toml;
+re-render with smk proj. Neither side depends on the other: no smk verb, skill or smkproj.toml
+field references Swamp, and nothing published from here calls smk, reads smkproj.toml or loads the
+smk plugin. It is public: no credentials, personal data, company or client name, and an instance
+names a service's host by vault key (`<service>-host`), never by address.
 
-## Layout
+## Check
 
-- `extensions/behaviors/<name>/`: one published extension per directory, self-contained
-  (`manifest.yaml` with `paths.base: manifest`, source, tests, README, LICENSE). Every manifest's
-  `repository` is this repository's public address, <https://github.com/reset/swamp-extensions>.
-- `workflows/`: the workflows this repository runs. `models/`: behavior instances the workflows use.
-- `docs/`: field notes that become feed posts, kept here until they are published.
-- `.claude/skills/swamp`, `.claude/skills/swamp-getting-started`: the vendor's skills, verbatim.
-- `serve/`: the release `swamp serve` runs from on a Linux host (its own flake, nixpkgs only) and its user
-  unit; `bin/serve-deploy <host>` installs a revision with smk's service verb. docs/workloads.md
-  says which workflows it schedules and what the others need.
-- `vaults/`: vault declarations (no secrets; `local_encryption` keeps its key under `.swamp/`, ignored).
+`make ci`: smk's checks, then `bin/test` (Deno check, fmt, lint and tests over `extensions/`, the
+host-naming check, `swamp behavior validate` and `swamp workflow validate` over `models/` and
+`workflows/`). The dev shell pins Deno and swamp in `.nix/flake.nix`, swamp at `.swamp.yaml`'s
+`swampVersion`; `bin/test` fails, naming it, when either is absent.
 
-## Checks
+## Landing
 
-`make ci` runs smk's checks (`smk format --check`, `smk lint`, `smk typecheck`) and `bin/test`, which
-type-checks and tests every extension with Deno and validates every behavior instance and workflow with
-swamp. Deno and swamp are both pinned in `.nix/flake.nix`, swamp at `.swamp.yaml`'s `swampVersion`, so
-the dev shell runs the same release on a Mac and on a build agent; `bin/test` fails, naming it, where
-swamp is absent. buildq builds every push from GitHub with `.buildq/pipeline.yml`, and its `buildq`
-status is the check main's ruleset requires.
+Work in a tree (`trees add <name>`), commit on its `worktree/<name>` branch, open the pull request
+with `smk pr create` and request its merge with `gh pr merge --auto --merge`, without asking: the
+host is GitHub, main's ruleset requires the `buildq` status that `.buildq/pipeline.yml` sets by
+running `make ci`, and the repository allows merge commits only. A merge deploys and publishes
+nothing. Live-state changes outside a merge (`swamp extension push`, `bin/serve-deploy`, creating
+or renaming a collective, posting to the feed, filing issues or pull requests with the vendor,
+joining its Discord) need explicit authorization.
 
-Extension work follows the vendor's lifecycle in `.claude/skills/swamp/references/extension/guide.md`:
-`deno check`, registration (`swamp behavior type search`), the adversarial review, unit tests,
-`swamp extension fmt --check`, `swamp extension quality`, and `swamp extension push --dry-run`. The
-push itself waits for authorization.
+## Where the rest lives
 
-## Privacy
-
-Crash occurrences read from crashq or Rollbar through the crash-reporting extension are data about
-players (install ids, device and OS facts, custom fields a game attached), and swamp stores what a
-method writes as versioned records under `.swamp/data/`, ignored by Git but kept on the machine that
-ran it. The controller for a studio's own games is the studio; for a client's game, the client.
-Open gaps for the privacy skill: a notice that this processing exists, an inventory of which fields
-each resource keeps (prefer counts and ids over payloads), the record lifetime and garbage-collection
-counts each resource declares, and how an erasure request reaches records stored here.
+- `.agents/smk-context.md`: per-skill facts (telemetry, vendor skills, extension interfaces and
+  publishing, the serve host, tracker pages, privacy), read by the skill that needs them.
+- `docs/workloads.md`: each workflow as a flight of a studio workload, and what runs on the host.
+- README.md: the layout.

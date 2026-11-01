@@ -26,7 +26,7 @@ Project = "SMK"
 Label = "swamp-extensions"
 Workspace = "smk"
 [Format]
-# The vendor's skills are copied verbatim from the swamp install (AGENTS.md); their Markdown is theirs to format.
+# The vendor's skills are copied verbatim from the swamp install (.agents/smk-context.md); their Markdown is theirs to format.
 # Extension sources are Deno's: deno fmt, deno lint and deno check run them from bin/test, and the vendor's
 # `swamp extension fmt --check` is the publish gate, so biome stays off them.
 Exclude = [".claude/skills/**", "extensions/**"]
