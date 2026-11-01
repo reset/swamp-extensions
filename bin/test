@@ -9,7 +9,7 @@
 #
 # The repo's tests, which `make test` and `make ci` run: every extension type-checks and its unit
 # tests pass under Deno, and every behavior instance and workflow validates under swamp. Deno comes
-# from the dev shell; swamp is installed per machine (AGENTS.md "Checks"), and its absence fails the
+# from the dev shell; swamp is installed per machine (AGENTS.md "Check"), and its absence fails the
 # run rather than passing it silently.
 #
 # Exit: 0 when every check passed, 1 when any failed or a tool is missing.
@@ -41,8 +41,8 @@ if ((${#sources[@]} > 0)); then
     fi
 fi
 
-# An instance names its service's host by vault key, never by address (AGENTS.md, Rules); a
-# loopback address names no one.
+# An instance names its service's host by vault key, never by address (.agents/smk-context.md,
+# Tools-engineer); a loopback address names no one.
 named_hosts=$(grep -nE "^  host: '[a-z]+://" models/*/*/*.yaml | grep -vE "://(127\.0\.0\.1|localhost)[:/']" || true)
 if [[ -n $named_hosts ]]; then
     echo "bin/test: these instances name a host instead of a vault key such as <service>-host:" >&2
