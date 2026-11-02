@@ -32,9 +32,10 @@ Swamp team: 3717.
   forge's address in the dev shell is the only internal hostname it carries.
 - The origin is <https://github.com/reset/swamp-extensions>; there is no copy on the forge. Pull requests
   open with `smk pr create` and land through automerge's GitHub App (smk/automerge README "GitHub"),
-  which `.github/automerge.json` asks to serve this repository: `smk pr merge` posts the `=merge=`
-  comment that merges one once buildq's `buildq` status passes, `--after #N` holds one until #N has
-  merged, and an admin's `=rush=` comment merges one at once, untested. A pull request whose body
+  which `.github/automerge.json` asks to serve this repository. A writer's pull request merges by
+  default once buildq's `buildq` status passes, since `smkproj.toml` sets no `[Merge]` `Auto = false`
+  (a draft or a fork's waits for a writer's `=merge=` comment), `smk pr merge --after #N` holds one
+  until #N has merged, and an admin's `=rush=` comment merges one at once, untested. A pull request whose body
   names an issue shows under that workq issue's Development.
 - Read Swamp's public manual and the vendor skills under `.claude/skills/`, not its AGPL source.
 - Nothing the studio relies on runs only here. Every workflow in `workflows/` is a flight of a
